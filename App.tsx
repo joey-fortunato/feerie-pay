@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { Dashboard } from './pages/Dashboard';
+import { Orders } from './pages/Orders';
 import { Transactions } from './pages/Transactions';
 import { Products } from './pages/Products';
 import { Checkout } from './pages/Checkout';
@@ -60,6 +61,8 @@ const App: React.FC = () => {
         return <Dashboard />;
       case 'reports':
         return <Reports />;
+      case 'orders':
+        return <Orders />;
       case 'transactions':
         return <Transactions />;
       case 'products':
@@ -83,6 +86,7 @@ const App: React.FC = () => {
      switch(currentView) {
        case 'dashboard': return 'Visão Geral';
        case 'reports': return 'Relatórios & Analytics';
+       case 'orders': return 'Pedidos';
        case 'transactions': return 'Transações';
        case 'products': return 'Meus Produtos';
        case 'payment_links': return 'Links de Pagamento';

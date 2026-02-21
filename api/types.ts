@@ -72,8 +72,10 @@ export interface ApiOrder {
   status: OrderStatus;
   created_at: string;
   updated_at: string;
+  paid_at?: string | null;
   customer?: ApiCustomer;
   product?: ApiProductSummary;
+  payments?: ApiPayment[];
 }
 
 export interface ApiPayment {

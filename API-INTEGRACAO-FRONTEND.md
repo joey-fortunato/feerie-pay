@@ -67,7 +67,7 @@ const isViewerOnly = user.role === 'viewer';
 ### 2.3. Rotas públicas vs protegidas
 
 - **Públicas**: não exigem token (`login`, `orders`, `forgot-password`, `password/reset`).
-- **Protegidas**: exigem token (`/me`, `logout`, produtos, clientes, utilizadores, listagem de orders).
+- **Protegidas**: exigem token (`/me`, `logout`, produtos, clientes, utilizadores, listagem de pedidos).
 
 ### 2.4. Respostas de erro comuns
 
@@ -261,11 +261,53 @@ Define uma nova password usando o token recebido por email.
 
 ---
 
-### 3.3. Orders (Encomendas)
+### 3.3. Orders (Pedidos) e Payments (Transações)
+
+#### Estrutura de páginas no frontend
+
+O sistema terá **duas páginas distintas**:
+
+| Página | Fonte de dados | Foco |
+|--------|----------------|------|
+| **Pedidos** | `GET /orders` (Order) | O que foi comprado: cliente, produto, total, estado do pedido. Visão comercial. |
+| **Transações** | payments (via `order.payments` ou endpoint dedicado) | Movimento financeiro: gateway, valor, status, datas. Visão financeira. |
+
+**Exemplo:** Um pedido #123 pode ter 2 transações (1ª falhou no AppyPay, 2ª sucedeu no Ekwanza). Na página **Pedidos** mostra-se o pedido como "Pago". Na página **Transações** mostram-se as duas tentativas com o respetivo resultado.
+
+#### Diferença entre Order (Pedido) e Payment (Transação)
+
+| Conceito | Order (Pedido) | Payment (Transação) |
+|----------|----------------|---------------------|
+| **O que representa** | O pedido de compra (o quê, quem, quanto) | A tentativa de pagamento (como, onde, resultado) |
+| **Exemplo** | "Cliente X quer comprar Produto Y por 90€" | "Pagamento via AppyPay, pendente" |
+| **Dados principais** | customer, product, subtotal, desconto, total, status | order_id, gateway, amount, status |
+| **Relacionamento** | 1 pedido → N transações | 1 transação → 1 pedido |
+| **Estados** | pending, paid, failed, cancelled, refunded | pending, paid, failed |
+
+**Resumo:**
+- **Order (Pedido)** = A compra em si (o que o cliente quer). Um pedido pode ter várias transações (ex.: tentativa 1 falhou, tentativa 2 sucedeu).
+- **Payment (Transação)** = O movimento financeiro num gateway (AppyPay/Ekwanza). Quando a transação fica `paid`, o pedido passa a `paid`.
+
+#### Como mostrar no frontend
+
+| Contexto | O que mostrar | Fonte |
+|----------|---------------|-------|
+| **Página Pedidos** | Status do pedido, total, cliente, produto | `order.status`, `order.total`, `order.customer` |
+| **Detalhe do pedido** | Toda a info do pedido + histórico de transações | `order` + `order.payments` |
+| **Página Transações** | Transações por gateway, valores, datas, status | `order.payments` em cada order |
+| **Checkout (após criar)** | Redirecionar para gateway usando `payment.id`, `payment.gateway` | `payment` da resposta POST /orders |
+
+**Sugestão de labels na UI:**
+- **Order** → "Pedido", "#PED-{short_id}"
+- **Payment** → "Transação", "Pagamento"
+- Status order `pending` + payment `pending` → "A aguardar pagamento"
+- Status order `paid` → "Pago" (mostrar data em `order.paid_at`)
+
+---
 
 #### POST `/orders` (público)
 
-Cria uma nova encomenda. **Não requer autenticação.**
+Cria um novo pedido. **Não requer autenticação.**
 
 **Request:**
 ```json
@@ -315,15 +357,18 @@ Cria uma nova encomenda. **Não requer autenticação.**
 
 **Importante:** O frontend deve usar o `order.id` e os dados do `payment` para redirecionar o utilizador ao gateway de pagamento (AppyPay ou Ekwanza). O fluxo de pagamento externo é tratado pelos webhooks/callbacks desses gateways.
 
+**Páginas no frontend:** Usar dados dos pedidos na página **Pedidos** e dados das transações (`payments`) na página **Transações**.
+
 ---
 
 #### GET `/orders` 🔒 👑
 
-Lista todas as encomendas (paginação). **Apenas admin.**
+Lista todos os pedidos (paginação). **Apenas admin.**
 
 **Headers:** `Authorization: Bearer {token}`
 
-**Response 200:**
+**Response 200:** Cada pedido inclui `payments` (lista de transações associadas).
+
 ```json
 {
   "data": [
@@ -346,7 +391,17 @@ Lista todas as encomendas (paginação). **Apenas admin.**
         "name": "Produto X",
         "price": "100.00",
         "type": "ebook"
-      }
+      },
+      "payments": [
+        {
+          "id": "ulid",
+          "order_id": "ulid",
+          "gateway": "appypay",
+          "amount": "100.00",
+          "status": "pending",
+          "created_at": "2025-02-20T10:00:00.000000Z"
+        }
+      ]
     }
   ],
   "meta": {
@@ -547,7 +602,7 @@ Lista clientes com paginação.
 
 #### GET `/customers/{id}` 🔒 👑
 
-Detalhe de um cliente, incluindo as últimas 10 encomendas.
+Detalhe de um cliente, incluindo os últimos 10 pedidos do cliente.
 
 **Response 200:**
 ```json
@@ -646,7 +701,7 @@ Todos os campos são opcionais.
 
 #### DELETE `/customers/{id}` 🔒 👑
 
-Apaga um cliente. **Não é possível apagar** um cliente que tenha encomendas associadas.
+Apaga um cliente. **Não é possível apagar** um cliente que tenha pedidos associados.
 
 **Response 200:**
 ```json
@@ -658,7 +713,7 @@ Apaga um cliente. **Não é possível apagar** um cliente que tenha encomendas a
 **Response 422:**
 ```json
 {
-  "message": "Não é possível apagar um cliente com encomendas associadas."
+  "message": "Não é possível apagar um cliente com pedidos associados."
 }
 ```
 
@@ -800,7 +855,7 @@ Todos os IDs principais (Order, Product, User, Customer, Payment) usam **ULID** 
 | POST /forgot-password | ✓ | — | — | — |
 | POST /password/reset | ✓ | — | — | — |
 | POST /orders | ✓ | — | — | — |
-| **GET /orders** | — | ✓ | — | — |
+| **GET /orders** (Pedidos) | — | ✓ | — | — |
 | GET /products | — | ✓ | ✓ | ✓ |
 | GET /products/{id} | — | ✓ | ✓ | ✓ |
 | GET /products/{id}/download | — | ✓ | ✓ | ✓ |
@@ -824,6 +879,8 @@ Todos os IDs principais (Order, Product, User, Customer, Payment) usam **ULID** 
 
 *Nota: O CRUD de cupons está em planeamento. Quando disponível, Editor terá acesso à edição.*
 
+*A API implementa estes níveis de acesso nas rotas.*
+
 ---
 
 ## 7. Fluxo recomendado no frontend
@@ -834,7 +891,7 @@ Todos os IDs principais (Order, Product, User, Customer, Payment) usam **ULID** 
 4. **Requisições protegidas** → Usar `credentials: 'include'` ou `withCredentials: true`. O cookie é enviado automaticamente.
 5. **401** → Redirecionar para login (o cookie foi invalidado ou expirou).
 6. **403** → Mostrar mensagem de falta de permissão.
-7. **Criar order** → Usar `order` e `payment` para integrar com AppyPay/Ekwanza (URLs de checkout fornecidas pelos gateways).
+7. **Criar pedido** → Usar `order` e `payment` para integrar com AppyPay/Ekwanza (URLs de checkout fornecidas pelos gateways).
 8. **Produtos com ficheiro** → Para download, usar endpoint com credenciais e tratar resposta como blob/ficheiro.
 
 ---

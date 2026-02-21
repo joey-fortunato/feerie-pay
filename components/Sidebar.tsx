@@ -16,6 +16,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, mob
   const allNavItems = [
     { id: 'dashboard' as ViewState, label: 'Dashboard', icon: LayoutDashboard, show: true },
     { id: 'reports' as ViewState, label: 'Relatórios', icon: PieChart, show: true },
+    { id: 'orders' as ViewState, label: 'Pedidos', icon: ShoppingCart, show: canViewOrders },
     { id: 'transactions' as ViewState, label: 'Transações', icon: CreditCard, show: canViewOrders },
     { id: 'products' as ViewState, label: 'Produtos', icon: Package, show: canViewProducts },
     { id: 'payment_links' as ViewState, label: 'Links de Pagamento', icon: LinkIcon, show: true },

@@ -114,4 +114,4 @@ export interface EKwanzaStatusResponse {
   Status: EKwanzaStatus;
 }
 
-export type ViewState = 'dashboard' | 'transactions' | 'products' | 'payment_links' | 'clients' | 'coupons' | 'reports' | 'team' | 'checkout_preview' | 'profile';
+export type ViewState = 'dashboard' | 'orders' | 'transactions' | 'products' | 'payment_links' | 'clients' | 'coupons' | 'reports' | 'team' | 'checkout_preview' | 'profile';
