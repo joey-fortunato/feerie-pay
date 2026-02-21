@@ -10,7 +10,17 @@ interface AuthState {
   isAdmin: boolean;
 }
 
-interface AuthContextValue extends AuthState {
+/** Helpers de permissão por role (doc API 2.2) */
+interface PermissionHelpers {
+  canEditProducts: boolean;
+  canViewOrders: boolean;
+  canManageTeam: boolean;
+  canManageCustomers: boolean;
+  canViewCustomers: boolean;
+  canViewProducts: boolean;
+}
+
+interface AuthContextValue extends AuthState, PermissionHelpers {
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string; errors?: Record<string, string[]> }>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
@@ -123,8 +133,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
+  const role = state.user?.role;
+  const permissionHelpers: PermissionHelpers = {
+    canEditProducts: role === 'admin' || role === 'editor',
+    canViewOrders: role === 'admin',
+    canManageTeam: role === 'admin',
+    canManageCustomers: role === 'admin',
+    canViewCustomers: role === 'admin' || role === 'editor' || role === 'viewer',
+    canViewProducts: role === 'admin' || role === 'editor' || role === 'viewer',
+  };
+
   const value: AuthContextValue = {
     ...state,
+    ...permissionHelpers,
     login,
     logout,
     refreshUser,

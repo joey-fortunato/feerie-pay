@@ -41,12 +41,35 @@ axios.get('/api/v1/me', { withCredentials: true });
 
 **Alternativa:** Se o cliente enviar o token no header `Authorization: Bearer {token}`, também funciona (útil para apps nativos ou testes).
 
-### 2.2. Rotas públicas vs protegidas
+### 2.2. Níveis de acesso (roles)
+
+A API devolve o `role` do utilizador em `/login` e `/me`. O frontend deve usar este valor para mostrar ou ocultar funcionalidades.
+
+| Código | Valor API | Descrição |
+|--------|-----------|-----------|
+| **A** | `admin` | **Administrador** — Acesso total: financeiro, configurações, equipe e saques. |
+| **E** | `editor` | **Editor** — Pode editar produtos, cupons e ver clientes. Sem acesso financeiro. |
+| **V** | `viewer` | **Visualizador** — Apenas visualização. Ideal para suporte nível 1. |
+
+**Exemplo no frontend:**
+```javascript
+const { user } = await api.get('/me');
+
+// Permissões por role
+const canEditProducts = ['admin', 'editor'].includes(user.role);
+const canViewOrders = user.role === 'admin';           // Financeiro
+const canManageTeam = user.role === 'admin';           // Utilizadores
+const canManageCustomers = user.role === 'admin';      // CRUD clientes
+const canViewCustomers = ['admin', 'editor', 'viewer'].includes(user.role);
+const isViewerOnly = user.role === 'viewer';
+```
+
+### 2.3. Rotas públicas vs protegidas
 
 - **Públicas**: não exigem token (`login`, `orders`, `forgot-password`, `password/reset`).
-- **Protegidas**: exigem token (`/me`, `logout`, produtos, utilizadores, listagem de orders).
+- **Protegidas**: exigem token (`/me`, `logout`, produtos, clientes, utilizadores, listagem de orders).
 
-### 2.3. Respostas de erro comuns
+### 2.4. Respostas de erro comuns
 
 | Código | Situação | Exemplo de mensagem |
 |--------|----------|---------------------|
@@ -260,7 +283,7 @@ Cria uma nova encomenda. **Não requer autenticação.**
 |-------|------|-------------|-----------|
 | name | string | Sim | Nome do cliente |
 | email | string (email) | Sim | Email do cliente |
-| phone | string | Não | Telefone |
+| phone | string (max 50) | Sim | Telefone do cliente |
 | product_id | string (ULID) | Sim | ID do produto (deve existir) |
 | coupon_code | string | Não | Código do cupom de desconto |
 | gateway | string | Sim | Valor: `appypay` ou `ekwanza` |
@@ -469,7 +492,179 @@ Faz download do ficheiro do produto (se existir).
 
 ---
 
-### 3.5. Utilizadores (Admin)
+### 3.5. Clientes (Customers) 👑
+
+Todos exigem autenticação e **role admin**.
+
+#### GET `/customers` 🔒 👑
+
+Lista clientes com paginação.
+
+**Query params:**
+
+| Parâmetro | Tipo | Default | Descrição |
+|-----------|------|---------|-----------|
+| page | int | 1 | Página atual |
+| per_page | int | 15 | Itens por página (máx. 50) |
+
+**Exemplo:** `GET /customers?page=1&per_page=20`
+
+**Response 200:**
+```json
+{
+  "data": [
+    {
+      "id": "ulid",
+      "name": "Nome do Cliente",
+      "email": "cliente@exemplo.com",
+      "phone": "+244 999 999 999",
+      "status": "active",
+      "orders_count": 3,
+      "created_at": "2025-02-20T10:00:00.000000Z",
+      "updated_at": "2025-02-20T10:00:00.000000Z"
+    }
+  ],
+  "meta": {
+    "current_page": 1,
+    "per_page": 15,
+    "total": 50,
+    "last_page": 4,
+    "from": 1,
+    "to": 15
+  },
+  "links": {
+    "first": "...",
+    "last": "...",
+    "prev": null,
+    "next": "..."
+  }
+}
+```
+
+**Estados possíveis de `status`:** `active`, `inactive`, `blocked`
+
+---
+
+#### GET `/customers/{id}` 🔒 👑
+
+Detalhe de um cliente, incluindo as últimas 10 encomendas.
+
+**Response 200:**
+```json
+{
+  "id": "ulid",
+  "name": "Nome do Cliente",
+  "email": "cliente@exemplo.com",
+  "phone": "+244 999 999 999",
+  "status": "active",
+  "orders": [
+    {
+      "id": "ulid",
+      "customer_id": "ulid",
+      "product_id": "ulid",
+      "subtotal": "100.00",
+      "total": "100.00",
+      "status": "pending"
+    }
+  ],
+  "created_at": "2025-02-20T10:00:00.000000Z",
+  "updated_at": "2025-02-20T10:00:00.000000Z"
+}
+```
+
+---
+
+#### POST `/customers` 🔒 👑
+
+Cria um cliente.
+
+**Request:**
+```json
+{
+  "name": "Nome do Cliente",
+  "email": "cliente@exemplo.com",
+  "phone": "+244 999 999 999",
+  "status": "active"
+}
+```
+
+| Campo | Tipo | Obrigatório | Descrição |
+|-------|------|-------------|-----------|
+| name | string (max 255) | Sim | Nome do cliente |
+| email | string (email) | Sim | Email único |
+| phone | string (max 50) | Sim | Telefone único |
+| status | string | Não | `active`, `inactive` ou `blocked` |
+
+**Response 201:**
+```json
+{
+  "id": "ulid",
+  "name": "Nome do Cliente",
+  "email": "cliente@exemplo.com",
+  "phone": "+244 999 999 999",
+  "status": "active",
+  "created_at": "2025-02-20T10:00:00.000000Z",
+  "updated_at": "2025-02-20T10:00:00.000000Z"
+}
+```
+
+---
+
+#### PUT/PATCH `/customers/{id}` 🔒 👑
+
+Atualiza um cliente.
+
+**Request:**
+```json
+{
+  "name": "Nome Atualizado",
+  "email": "novoemail@exemplo.com",
+  "phone": "+244 888 888 888",
+  "status": "inactive"
+}
+```
+
+Todos os campos são opcionais.
+
+**Response 200:**
+```json
+{
+  "message": "Cliente atualizado com sucesso.",
+  "data": {
+    "id": "ulid",
+    "name": "Nome Atualizado",
+    "email": "novoemail@exemplo.com",
+    "phone": "+244 888 888 888",
+    "status": "inactive",
+    "created_at": "2025-02-20T10:00:00.000000Z",
+    "updated_at": "2025-02-21T12:00:00.000000Z"
+  }
+}
+```
+
+---
+
+#### DELETE `/customers/{id}` 🔒 👑
+
+Apaga um cliente. **Não é possível apagar** um cliente que tenha encomendas associadas.
+
+**Response 200:**
+```json
+{
+  "message": "Cliente apagado com sucesso."
+}
+```
+
+**Response 422:**
+```json
+{
+  "message": "Não é possível apagar um cliente com encomendas associadas."
+}
+```
+
+---
+
+### 3.6. Utilizadores (Admin)
 
 Todos exigem autenticação e **role admin**.
 
@@ -551,7 +746,7 @@ Apaga um utilizador. Não é possível apagar a própria conta.
 
 ---
 
-### 3.6. Admin
+### 3.7. Admin
 
 #### GET `/admin` 🔒 👑
 
@@ -595,39 +790,52 @@ Todos os IDs principais (Order, Product, User, Customer, Payment) usam **ULID** 
 
 ---
 
-## 6. Resumo de permissões
+## 6. Resumo de permissões por role
 
-| Rota | Autenticado | Admin |
-|------|-------------|-------|
-| POST /login | Não | — |
-| POST /logout | Sim | Não |
-| GET /me | Sim | Não |
-| POST /forgot-password | Não | — |
-| POST /password/reset | Não | — |
-| POST /orders | Não | — |
-| GET /orders | Sim | Sim |
-| GET /products | Sim | Não |
-| GET /products/{id} | Sim | Não |
-| GET /products/{id}/download | Sim | Não |
-| POST /products | Sim | Sim |
-| PUT/PATCH /products/{id} | Sim | Sim |
-| DELETE /products/{id} | Sim | Sim |
-| POST /users | Sim | Sim |
-| PUT/PATCH /users/{id} | Sim | Sim |
-| DELETE /users/{id} | Sim | Sim |
-| GET /admin | Sim | Sim |
+| Rota | Público | A (admin) | E (editor) | V (viewer) |
+|------|---------|-----------|------------|------------|
+| POST /login | ✓ | ✓ | ✓ | ✓ |
+| POST /logout | — | ✓ | ✓ | ✓ |
+| GET /me | — | ✓ | ✓ | ✓ |
+| POST /forgot-password | ✓ | — | — | — |
+| POST /password/reset | ✓ | — | — | — |
+| POST /orders | ✓ | — | — | — |
+| **GET /orders** | — | ✓ | — | — |
+| GET /products | — | ✓ | ✓ | ✓ |
+| GET /products/{id} | — | ✓ | ✓ | ✓ |
+| GET /products/{id}/download | — | ✓ | ✓ | ✓ |
+| **POST /products** | — | ✓ | ✓ | — |
+| **PUT/PATCH /products/{id}** | — | ✓ | ✓ | — |
+| **DELETE /products/{id}** | — | ✓ | ✓ | — |
+| GET /customers | — | ✓ | ✓ | ✓ |
+| GET /customers/{id} | — | ✓ | ✓ | ✓ |
+| **POST /customers** | — | ✓ | — | — |
+| **PUT/PATCH /customers/{id}** | — | ✓ | — | — |
+| **DELETE /customers/{id}** | — | ✓ | — | — |
+| **POST /users** | — | ✓ | — | — |
+| **PUT/PATCH /users/{id}** | — | ✓ | — | — |
+| **DELETE /users/{id}** | — | ✓ | — | — |
+| GET /admin | — | ✓ | — | — |
+
+**Legenda:**
+- **A (admin)** — Acesso total: financeiro, configurações, equipe, saques.
+- **E (editor)** — Edita produtos e cupons; vê clientes. Sem acesso financeiro.
+- **V (viewer)** — Apenas visualização (produtos, clientes). Suporte nível 1.
+
+*Nota: O CRUD de cupons está em planeamento. Quando disponível, Editor terá acesso à edição.*
 
 ---
 
 ## 7. Fluxo recomendado no frontend
 
 1. **Login** → Usar `credentials: 'include'`. O cookie é definido pelo servidor e guardado automaticamente pelo browser.
-2. **Guardar `user`** → Armazenar os dados do utilizador em estado (ex: React Context, Zustand, Pinia) para uso na UI.
-3. **Requisições protegidas** → Usar `credentials: 'include'` ou `withCredentials: true`. O cookie é enviado automaticamente.
-4. **401** → Redirecionar para login (o cookie foi invalidado ou expirou).
-5. **403** → Mostrar mensagem de falta de permissão.
-6. **Criar order** → Usar `order` e `payment` para integrar com AppyPay/Ekwanza (URLs de checkout fornecidas pelos gateways).
-7. **Produtos com ficheiro** → Para download, usar endpoint com credenciais e tratar resposta como blob/ficheiro.
+2. **Guardar `user`** → Armazenar os dados do utilizador (incluindo `role`) em estado (ex: React Context, Zustand, Pinia) para uso na UI.
+3. **Verificar `role`** → Mostrar/ocultar menus e ações conforme os níveis de acesso (ver secção 2.2 e 6).
+4. **Requisições protegidas** → Usar `credentials: 'include'` ou `withCredentials: true`. O cookie é enviado automaticamente.
+5. **401** → Redirecionar para login (o cookie foi invalidado ou expirou).
+6. **403** → Mostrar mensagem de falta de permissão.
+7. **Criar order** → Usar `order` e `payment` para integrar com AppyPay/Ekwanza (URLs de checkout fornecidas pelos gateways).
+8. **Produtos com ficheiro** → Para download, usar endpoint com credenciais e tratar resposta como blob/ficheiro.
 
 ---
 

@@ -3,6 +3,8 @@ export enum TransactionStatus {
   PENDING = 'PENDING',
   PAID = 'PAID',
   FAILED = 'FAILED',
+  CANCELLED = 'CANCELLED',
+  REFUNDED = 'REFUNDED',
   CONTESTED = 'CONTESTED',
 }
 

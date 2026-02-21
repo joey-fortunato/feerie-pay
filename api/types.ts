@@ -24,11 +24,33 @@ export interface MeResponse {
   user: ApiUser;
 }
 
+export type CustomerStatus = 'active' | 'inactive' | 'blocked';
+
 export interface ApiCustomer {
   id: string;
   name: string;
   email: string;
   phone: string | null;
+  status?: CustomerStatus;
+  orders_count?: number;
+  total_spent?: string | number;
+  created_at?: string;
+  updated_at?: string;
+  orders?: Array<{ id: string; customer_id: string; product_id: string; subtotal: string; total: string; status: string }>;
+}
+
+export interface CreateCustomerRequest {
+  name: string;
+  email: string;
+  phone: string;
+  status?: CustomerStatus;
+}
+
+export interface UpdateCustomerRequest {
+  name?: string;
+  email?: string;
+  phone?: string | null;
+  status?: CustomerStatus;
 }
 
 export interface ApiProductSummary {

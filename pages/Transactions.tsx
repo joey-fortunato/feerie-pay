@@ -1,17 +1,15 @@
 
-import React, { useState } from 'react';
-import { Download, Filter, MoreHorizontal, CheckCircle, XCircle, Clock, Plus, X, Search, User, Link, Tag, DollarSign, ChevronRight, Copy, CornerUpLeft, Send, FileText, Shield, Smartphone, CreditCard, Wallet } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Download, Filter, Plus, X, User, Link, Tag, DollarSign, ChevronRight, Copy, CornerUpLeft, Send, FileText, Smartphone, CreditCard, Wallet, Loader2, AlertCircle, Clock, CheckCircle, Receipt } from 'lucide-react';
 import { Transaction, TransactionStatus } from '../types';
+import { ordersApi } from '../services/ordersApi';
+import { apiOrderToTransaction, type OrderDisplay, formatDateTime } from '../lib/orderMapper';
+import { ApiError } from '../services/api';
+import { productsApi } from '../services/productsApi';
+import { useToast } from '../contexts/ToastContext';
+import type { ApiProduct } from '../api/types';
 
-const transactionsData: Transaction[] = [
-  { id: 'ORD-7782', customerName: 'Mario Baptista', customerEmail: 'mario.b@gmail.com', amount: 45000, date: '12 Out, 2023', status: TransactionStatus.PAID, method: 'e-kwanza' },
-  { id: 'ORD-7781', customerName: 'Luisa Paulo', customerEmail: 'luisa.p@hotmail.com', amount: 12000, date: '12 Out, 2023', status: TransactionStatus.PENDING, method: 'multicaixa_express' },
-  { id: 'ORD-7780', customerName: 'José Eduardo', customerEmail: 'jose.ed@company.ao', amount: 8500, date: '11 Out, 2023', status: TransactionStatus.FAILED, method: 'e-kwanza' },
-  { id: 'ORD-7779', customerName: 'Ana Maria', customerEmail: 'anam@gmail.com', amount: 22000, date: '11 Out, 2023', status: TransactionStatus.PAID, method: 'multicaixa_express' },
-  { id: 'ORD-7778', customerName: 'Pedro Gomes', customerEmail: 'pgomes@tech.ao', amount: 150000, date: '10 Out, 2023', status: TransactionStatus.PAID, method: 'card' },
-];
-
-// Mock Data for Dropdowns
+// Mock Data for Create Charge modal dropdowns (quando não houver API de clientes)
 const mockCustomers = [
   { id: 1, name: 'Mario Baptista' },
   { id: 2, name: 'Luisa Paulo' },
@@ -19,23 +17,20 @@ const mockCustomers = [
   { id: 4, name: 'Ana Maria' },
 ];
 
-const mockProducts = [
-  { id: 1, name: 'E-book: Dominando o E-kwanza', price: 8000 },
-  { id: 2, name: 'Livro: Empreendedorismo', price: 15000 },
-  { id: 3, name: 'Curso: Marketing Digital', price: 25000 },
-  { id: 4, name: 'Mentoria Individual', price: 50000 },
-];
-
 const StatusBadge = ({ status }: { status: TransactionStatus }) => {
   switch (status) {
     case TransactionStatus.PAID:
-      return <span className="flex items-center gap-1 text-xs font-medium bg-green-100 text-green-700 px-2.5 py-1 rounded-full"><CheckCircle size={12} /> Pago</span>;
+      return <span className="flex items-center gap-1 text-xs font-medium bg-green-100 text-green-700 px-2.5 py-1 rounded-full"><span className="w-1.5 h-1.5 rounded-full bg-green-500" /> Pago</span>;
     case TransactionStatus.PENDING:
-      return <span className="flex items-center gap-1 text-xs font-medium bg-yellow-100 text-yellow-700 px-2.5 py-1 rounded-full"><Clock size={12} /> Pendente</span>;
+      return <span className="flex items-center gap-1 text-xs font-medium bg-yellow-100 text-yellow-700 px-2.5 py-1 rounded-full"><span className="w-1.5 h-1.5 rounded-full bg-yellow-500" /> Pendente</span>;
     case TransactionStatus.FAILED:
-      return <span className="flex items-center gap-1 text-xs font-medium bg-red-100 text-red-700 px-2.5 py-1 rounded-full"><XCircle size={12} /> Falhou</span>;
+      return <span className="flex items-center gap-1 text-xs font-medium bg-red-100 text-red-700 px-2.5 py-1 rounded-full"><span className="w-1.5 h-1.5 rounded-full bg-red-500" /> Falhou</span>;
+    case TransactionStatus.CANCELLED:
+      return <span className="flex items-center gap-1 text-xs font-medium bg-gray-100 text-gray-700 px-2.5 py-1 rounded-full"><span className="w-1.5 h-1.5 rounded-full bg-gray-500" /> Cancelado</span>;
+    case TransactionStatus.REFUNDED:
+      return <span className="flex items-center gap-1 text-xs font-medium bg-orange-100 text-orange-700 px-2.5 py-1 rounded-full"><CornerUpLeft size={12} /> Reembolsado</span>;
     default:
-      return null;
+      return <span className="flex items-center gap-1 text-xs font-medium bg-gray-100 text-gray-700 px-2.5 py-1 rounded-full">{status}</span>;
   }
 };
 
@@ -61,12 +56,73 @@ const MethodIcon = ({ method }: { method: string }) => {
    );
 };
 
+const mockProducts = [
+  { id: '1', name: 'E-book: Dominando o E-kwanza', price: 8000 },
+  { id: '2', name: 'Livro: Empreendedorismo', price: 15000 },
+  { id: '3', name: 'Curso: Marketing Digital', price: 25000 },
+  { id: '4', name: 'Mentoria Individual', price: 50000 },
+];
+
 export const Transactions: React.FC = () => {
+  const toast = useToast();
   const [isChargeModalOpen, setIsChargeModalOpen] = useState(false);
-  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
-  const [transactions, setTransactions] = useState<Transaction[]>(transactionsData);
-  
-  // Form State
+  const [selectedTransaction, setSelectedTransaction] = useState<OrderDisplay | null>(null);
+  const [transactions, setTransactions] = useState<OrderDisplay[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [paginationMeta, setPaginationMeta] = useState<{
+    current_page: number;
+    per_page: number;
+    total: number;
+    last_page: number;
+  } | null>(null);
+  const [productsForModal, setProductsForModal] = useState<{ id: string; name: string; price: number }[]>(mockProducts);
+
+  const fetchOrders = useCallback(async (page: number) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const res = (await ordersApi.list(page, 10)) as unknown as Record<string, unknown>;
+      const data = Array.isArray(res?.data) ? res.data : [];
+      const meta = (res?.meta ?? res) as Record<string, unknown> | undefined;
+      const total = Number(meta?.total ?? data.length) || 0;
+      const perPage = Number(meta?.per_page ?? 10) || 10;
+      const currentPageNum = Number(meta?.current_page ?? page) || 1;
+      const lastPage = Number(meta?.last_page) || Math.max(1, Math.ceil(total / perPage));
+      const mapped = (data as import('../api/types').ApiOrder[]).map(apiOrderToTransaction);
+      setTransactions(mapped);
+      setPaginationMeta({
+        current_page: currentPageNum,
+        per_page: perPage,
+        total,
+        last_page: lastPage,
+      });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Erro ao carregar transações.');
+      console.error('[Transactions] fetchOrders error:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchOrders(currentPage);
+  }, [currentPage, fetchOrders]);
+
+  useEffect(() => {
+    productsApi.list(1, 100).then((r) => {
+      const list = Array.isArray(r?.data) ? r.data : [];
+      setProductsForModal(
+        (list as ApiProduct[]).map((p) => ({
+          id: p.id,
+          name: p.name,
+          price: parseFloat(p.price) || 0,
+        }))
+      );
+    }).catch(() => {});
+  }, []);
+
   const [formStep, setFormStep] = useState<'existing_client' | 'new_client'>('existing_client');
   const [selectedProduct, setSelectedProduct] = useState<string>('');
   const [productPrice, setProductPrice] = useState<number | string>('');
@@ -75,7 +131,7 @@ export const Transactions: React.FC = () => {
   const handleProductChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const prodId = e.target.value;
     setSelectedProduct(prodId);
-    const product = mockProducts.find(p => p.id.toString() === prodId);
+    const product = productsForModal.find((p) => p.id === prodId);
     if (product) {
       setProductPrice(product.price);
     } else {
@@ -83,17 +139,79 @@ export const Transactions: React.FC = () => {
     }
   };
 
-  const handleRowClick = (tx: Transaction) => {
+  const handleRowClick = (tx: OrderDisplay) => {
     setSelectedTransaction(tx);
   };
 
+  const totalTransactions = paginationMeta ? paginationMeta.total : 0;
+  const totalRevenuePage = transactions.reduce((acc, t) => acc + t.amount, 0);
+  const paidCount = transactions.filter((t) => t.status === TransactionStatus.PAID).length;
+  const averageTicket = transactions.length > 0 ? totalRevenuePage / transactions.length : 0;
+
   return (
     <div className="p-6 lg:p-10 max-w-7xl mx-auto relative">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-8 gap-4">
-        <div>
-          <h2 className="text-2xl font-bold text-dark-text">Transações</h2>
-          <p className="text-gray-500 text-sm">Gerencie todos os seus pagamentos recebidos.</p>
+      {error && (
+        <div className="mb-6 flex items-center gap-3 p-4 bg-red-50 border border-red-100 rounded-xl text-red-700">
+          <AlertCircle size={20} />
+          <span className="flex-1">{error}</span>
+          <button onClick={() => fetchOrders(currentPage)} className="text-sm font-semibold hover:underline">
+            Tentar novamente
+          </button>
         </div>
+      )}
+      <div>
+        <h2 className="text-2xl font-bold text-dark-text">Transações</h2>
+        <p className="text-gray-500 text-sm">Gerencie todos os seus pagamentos recebidos.</p>
+      </div>
+
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+        <div className="bg-white relative overflow-hidden rounded-2xl p-6 shadow-soft border border-gray-50 group hover:shadow-lg transition-all duration-300">
+          <div className="absolute -right-6 -top-6 w-32 h-32 bg-brand-primary/10 rounded-full blur-2xl group-hover:bg-brand-primary/20 transition-all duration-500"></div>
+          <div className="relative z-10">
+            <div className="w-10 h-10 bg-white border border-gray-100 rounded-lg flex items-center justify-center mb-4 shadow-sm text-brand-primary">
+              <DollarSign size={20} />
+            </div>
+            <p className="text-3xl font-bold text-dark-text mb-1">
+              Kz {averageTicket.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </p>
+            <p className="text-sm text-gray-500">
+              Ticket médio calculado sobre <span className="font-semibold text-brand-primary">{transactions.length}</span> transações desta página.
+            </p>
+          </div>
+        </div>
+
+        <div className="bg-white relative overflow-hidden rounded-2xl p-6 shadow-soft border border-gray-50 group hover:shadow-lg transition-all duration-300">
+          <div className="absolute -right-6 -top-6 w-32 h-32 bg-emerald-400/10 rounded-full blur-2xl group-hover:bg-emerald-400/20 transition-all duration-500"></div>
+          <div className="relative z-10">
+            <div className="w-10 h-10 bg-white border border-gray-100 rounded-lg flex items-center justify-center mb-4 shadow-sm text-emerald-600">
+              <Receipt size={20} />
+            </div>
+            <p className="text-3xl font-bold text-dark-text mb-1">{totalTransactions.toLocaleString()}</p>
+            <p className="text-sm text-gray-500">
+              Transações registadas no sistema.
+            </p>
+          </div>
+        </div>
+
+        <div className="bg-white relative overflow-hidden rounded-2xl p-6 shadow-soft border border-gray-50 group hover:shadow-lg transition-all duration-300">
+          <div className="absolute -right-6 -top-6 w-32 h-32 bg-green-400/10 rounded-full blur-2xl group-hover:bg-green-400/20 transition-all duration-500"></div>
+          <div className="relative z-10">
+            <div className="w-10 h-10 bg-white border border-gray-100 rounded-lg flex items-center justify-center mb-4 shadow-sm text-green-600">
+              <Wallet size={20} />
+            </div>
+            <p className="text-3xl font-bold text-dark-text mb-1">
+              Kz {totalRevenuePage.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </p>
+            <p className="text-sm text-gray-500">
+              Volume exibido nesta página <span className="font-semibold text-green-600">({paidCount} pagas)</span>.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex-1" />
         <div className="flex gap-3">
           <button className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors">
             <Filter size={16} />
@@ -114,6 +232,13 @@ export const Transactions: React.FC = () => {
       </div>
 
       <div className="bg-white rounded-2xl shadow-soft border border-gray-100 overflow-hidden">
+        {isLoading ? (
+          <div className="py-20 flex flex-col items-center justify-center text-gray-500">
+            <Loader2 size={32} className="animate-spin mb-4" />
+            <p>A carregar transações...</p>
+          </div>
+        ) : transactions.length > 0 ? (
+        <>
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead className="bg-gray-50/50 border-b border-gray-100">
@@ -155,9 +280,44 @@ export const Transactions: React.FC = () => {
             </tbody>
           </table>
         </div>
-        <div className="p-4 border-t border-gray-100 flex justify-center">
-          <button className="text-sm text-gray-500 hover:text-brand-primary font-medium">Carregar mais</button>
-        </div>
+        {paginationMeta && paginationMeta.total > 0 && (
+          <div className="flex items-center justify-between px-6 py-4 border-t border-gray-100 bg-gray-50/50">
+            <p className="text-sm text-gray-500">
+              Mostrando {(paginationMeta.current_page - 1) * paginationMeta.per_page + 1}–{Math.min(paginationMeta.current_page * paginationMeta.per_page, paginationMeta.total)} de {paginationMeta.total} transações
+            </p>
+            {paginationMeta.last_page > 1 && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={paginationMeta.current_page <= 1}
+                  className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  Anterior
+                </button>
+                <span className="px-3 py-2 text-sm text-gray-600">
+                  Página {paginationMeta.current_page} de {paginationMeta.last_page}
+                </span>
+                <button
+                  onClick={() => setCurrentPage((p) => Math.min(paginationMeta.last_page, p + 1))}
+                  disabled={paginationMeta.current_page >= paginationMeta.last_page}
+                  className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  Próxima
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+        </>
+        ) : (
+          <div className="py-16 flex flex-col items-center justify-center text-center">
+            <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
+              <DollarSign size={24} className="text-gray-400" />
+            </div>
+            <h3 className="text-lg font-medium text-dark-text">Ainda não há transações</h3>
+            <p className="text-gray-500 text-sm mt-1 max-w-xs">As encomendas e pagamentos aparecerão aqui.</p>
+          </div>
+        )}
       </div>
 
       {/* TRANSACTION DETAILS DRAWER (SLIDE-OVER) */}
@@ -177,8 +337,16 @@ export const Transactions: React.FC = () => {
                 <div>
                    <div className="flex items-center gap-3 mb-2">
                       <h2 className="text-lg font-bold text-gray-500">Pagamento</h2>
-                      <span className="text-sm bg-gray-100 px-2 py-0.5 rounded text-gray-500 font-mono">{selectedTransaction.id}</span>
-                      <button className="text-gray-400 hover:text-brand-primary" title="Copiar ID"><Copy size={14} /></button>
+                      <span className="text-sm bg-gray-100 px-2 py-0.5 rounded text-gray-500 font-mono truncate max-w-[140px]" title={selectedTransaction.id}>{selectedTransaction.id}</span>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(selectedTransaction.id);
+                          toast.success('ID copiado.');
+                        }}
+                        className="text-gray-400 hover:text-brand-primary p-1 rounded" title="Copiar ID"
+                      >
+                        <Copy size={14} />
+                      </button>
                    </div>
                    <div className="flex items-end gap-3">
                       <span className="text-3xl font-bold text-dark-text tracking-tight">
@@ -204,7 +372,7 @@ export const Transactions: React.FC = () => {
                       <span className="text-xs font-semibold text-gray-400 uppercase mb-1">Status Atual</span>
                       <StatusBadge status={selectedTransaction.status} />
                    </div>
-                   {selectedTransaction.status === 'PENDING' && (
+                   {selectedTransaction.status === TransactionStatus.PENDING && (
                      <div className="flex gap-2">
                         <button className="px-3 py-1.5 bg-white border border-gray-200 text-xs font-bold text-gray-600 rounded-lg hover:bg-gray-100 shadow-sm">
                            Cancelar
@@ -214,7 +382,7 @@ export const Transactions: React.FC = () => {
                         </button>
                      </div>
                    )}
-                   {selectedTransaction.status === 'PAID' && (
+                   {selectedTransaction.status === TransactionStatus.PAID && (
                       <button className="flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 text-xs font-bold text-gray-600 rounded-lg hover:bg-gray-100 shadow-sm transition-all">
                          <CornerUpLeft size={14} /> Reembolsar
                       </button>
@@ -236,14 +404,20 @@ export const Transactions: React.FC = () => {
                          <span className="text-sm text-gray-500">Email</span>
                          <span className="text-sm font-medium text-brand-primary hover:underline cursor-pointer">{selectedTransaction.customerEmail}</span>
                       </div>
-                      <div className="flex justify-between items-center">
+                      <div className="flex justify-between items-center border-b border-gray-50 pb-3">
                          <span className="text-sm text-gray-500">Telefone</span>
-                         <span className="text-sm font-medium text-dark-text">+244 9XX XXX XXX</span>
+                         <span className="text-sm font-medium text-dark-text">{selectedTransaction.customerPhone ?? '—'}</span>
                       </div>
+                      {selectedTransaction.customerId && (
+                        <div className="flex justify-between items-center">
+                           <span className="text-sm text-gray-500">ID Cliente</span>
+                           <span className="text-xs font-mono text-gray-400 truncate max-w-[120px]" title={selectedTransaction.customerId}>{selectedTransaction.customerId}</span>
+                        </div>
+                      )}
                    </div>
                 </div>
 
-                {/* Payment Details */}
+                {/* Detalhes da Venda */}
                 <div>
                    <h3 className="text-sm font-bold text-dark-text mb-4 flex items-center gap-2">
                       <Tag size={16} className="text-gray-400" />
@@ -252,8 +426,26 @@ export const Transactions: React.FC = () => {
                    <div className="bg-white border border-gray-100 rounded-xl p-4 shadow-sm space-y-3">
                       <div className="flex justify-between items-center border-b border-gray-50 pb-3">
                          <span className="text-sm text-gray-500">Produto</span>
-                         <span className="text-sm font-medium text-dark-text">Curso: Marketing Digital</span>
+                         <span className="text-sm font-medium text-dark-text text-right max-w-[60%]">{selectedTransaction.productName ?? '—'}</span>
                       </div>
+                      {selectedTransaction.productType != null && (
+                        <div className="flex justify-between items-center border-b border-gray-50 pb-3">
+                           <span className="text-sm text-gray-500">Tipo</span>
+                           <span className="text-sm font-medium text-dark-text">{selectedTransaction.productType}</span>
+                        </div>
+                      )}
+                      {selectedTransaction.productPrice != null && (
+                        <div className="flex justify-between items-center border-b border-gray-50 pb-3">
+                           <span className="text-sm text-gray-500">Preço unitário</span>
+                           <span className="text-sm font-medium text-dark-text">Kz {selectedTransaction.productPrice.toLocaleString()}</span>
+                        </div>
+                      )}
+                      {selectedTransaction.productId && (
+                        <div className="flex justify-between items-center border-b border-gray-50 pb-3">
+                           <span className="text-sm text-gray-500">ID Produto</span>
+                           <span className="text-xs font-mono text-gray-400 truncate max-w-[120px]" title={selectedTransaction.productId}>{selectedTransaction.productId}</span>
+                        </div>
+                      )}
                       <div className="flex justify-between items-center border-b border-gray-50 pb-3">
                          <span className="text-sm text-gray-500">Método</span>
                          <div className="flex items-center gap-2">
@@ -277,56 +469,65 @@ export const Transactions: React.FC = () => {
                             )}
                          </div>
                       </div>
-                      <div className="flex justify-between items-center border-b border-gray-50 pb-3">
-                         <span className="text-sm text-gray-500">Taxa de Processamento</span>
-                         <span className="text-sm font-medium text-red-500">- Kz {(selectedTransaction.amount * 0.03).toLocaleString()}</span>
-                      </div>
+                      {selectedTransaction.subtotal != null && selectedTransaction.subtotal !== selectedTransaction.amount && (
+                        <div className="flex justify-between items-center border-b border-gray-50 pb-3">
+                           <span className="text-sm text-gray-500">Subtotal</span>
+                           <span className="text-sm font-medium text-dark-text">Kz {selectedTransaction.subtotal.toLocaleString()}</span>
+                        </div>
+                      )}
+                      {selectedTransaction.discountAmount != null && selectedTransaction.discountAmount > 0 && (
+                        <div className="flex justify-between items-center border-b border-gray-50 pb-3">
+                           <span className="text-sm text-gray-500">Desconto</span>
+                           <span className="text-sm font-medium text-green-600">- Kz {selectedTransaction.discountAmount.toLocaleString()}</span>
+                        </div>
+                      )}
                       <div className="flex justify-between items-center pt-1">
-                         <span className="text-sm font-bold text-dark-text">Líquido (Recebido)</span>
-                         <span className="text-sm font-bold text-green-600">Kz {(selectedTransaction.amount * 0.97).toLocaleString()}</span>
+                         <span className="text-sm font-bold text-dark-text">Total</span>
+                         <span className="text-sm font-bold text-green-600">Kz {selectedTransaction.amount.toLocaleString()}</span>
                       </div>
                    </div>
                 </div>
 
-                {/* Timeline */}
+                {/* Histórico */}
                 <div>
                    <h3 className="text-sm font-bold text-dark-text mb-4 flex items-center gap-2">
                       <Clock size={16} className="text-gray-400" />
                       Histórico
                    </h3>
                    <div className="relative border-l-2 border-gray-100 ml-3 space-y-6 pb-2">
-                      
-                      {/* Step 1 */}
                       <div className="relative pl-6">
                          <div className="absolute -left-[9px] top-1 w-4 h-4 rounded-full bg-gray-200 border-2 border-white shadow-sm"></div>
-                         <p className="text-xs text-gray-400 mb-0.5">10 Out, 14:30</p>
-                         <p className="text-sm font-medium text-dark-text">Cobrança criada</p>
-                         <p className="text-xs text-gray-500">Checkout iniciado via link de pagamento.</p>
+                         <p className="text-xs text-gray-400 mb-0.5">
+                           {selectedTransaction.createdAt ? formatDateTime(selectedTransaction.createdAt) : selectedTransaction.date}
+                         </p>
+                         <p className="text-sm font-medium text-dark-text">Encomenda criada</p>
+                         <p className="text-xs text-gray-500">Pedido registado no sistema.</p>
                       </div>
 
-                      {/* Step 2 */}
                       <div className="relative pl-6">
-                         <div className={`absolute -left-[9px] top-1 w-4 h-4 rounded-full border-2 border-white shadow-sm ${selectedTransaction.status === 'FAILED' ? 'bg-red-500' : 'bg-brand-primary'}`}></div>
-                         <p className="text-xs text-gray-400 mb-0.5">10 Out, 14:32</p>
-                         <p className="text-sm font-medium text-dark-text">
-                            {selectedTransaction.status === 'PENDING' && 'Aguardando pagamento...'}
-                            {selectedTransaction.status === 'PAID' && 'Pagamento confirmado'}
-                            {selectedTransaction.status === 'FAILED' && 'Falha no processamento'}
+                         <div className={`absolute -left-[9px] top-1 w-4 h-4 rounded-full border-2 border-white shadow-sm ${
+                           selectedTransaction.status === TransactionStatus.FAILED ? 'bg-red-500' :
+                           selectedTransaction.status === TransactionStatus.CANCELLED ? 'bg-gray-400' :
+                           selectedTransaction.status === TransactionStatus.REFUNDED ? 'bg-orange-500' :
+                           selectedTransaction.status === TransactionStatus.PAID ? 'bg-green-500' : 'bg-brand-primary'
+                         }`}></div>
+                         <p className="text-xs text-gray-400 mb-0.5">
+                           {selectedTransaction.updatedAt ? formatDateTime(selectedTransaction.updatedAt) : (selectedTransaction.createdAt ? formatDateTime(selectedTransaction.createdAt) : '—')}
                          </p>
-                         {selectedTransaction.status === 'PAID' && (
+                         <p className="text-sm font-medium text-dark-text">
+                            {selectedTransaction.status === TransactionStatus.PENDING && 'Aguardando pagamento'}
+                            {selectedTransaction.status === TransactionStatus.PAID && 'Pagamento confirmado'}
+                            {selectedTransaction.status === TransactionStatus.FAILED && 'Falha no processamento'}
+                            {selectedTransaction.status === TransactionStatus.CANCELLED && 'Cancelado'}
+                            {selectedTransaction.status === TransactionStatus.REFUNDED && 'Reembolsado'}
+                         </p>
+                         {selectedTransaction.status === TransactionStatus.PAID && (
                            <p className="text-xs text-gray-500">Transação capturada com sucesso.</p>
                          )}
+                         {selectedTransaction.status === TransactionStatus.REFUNDED && (
+                           <p className="text-xs text-gray-500">Valor devolvido ao cliente.</p>
+                         )}
                       </div>
-                      
-                      {/* Step 3 (Receipt) */}
-                      {selectedTransaction.status === 'PAID' && (
-                         <div className="relative pl-6">
-                            <div className="absolute -left-[9px] top-1 w-4 h-4 rounded-full bg-green-500 border-2 border-white shadow-sm"></div>
-                            <p className="text-xs text-gray-400 mb-0.5">10 Out, 14:32</p>
-                            <p className="text-sm font-medium text-dark-text">Recibo enviado</p>
-                            <p className="text-xs text-gray-500">Email enviado para {selectedTransaction.customerEmail}</p>
-                         </div>
-                      )}
                    </div>
                 </div>
                 
@@ -429,7 +630,7 @@ export const Transactions: React.FC = () => {
                       className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-200 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all bg-white appearance-none text-gray-600"
                     >
                       <option value="">Selecione produtos...</option>
-                      {mockProducts.map(p => (
+                      {productsForModal.map((p) => (
                         <option key={p.id} value={p.id}>{p.name}</option>
                       ))}
                     </select>

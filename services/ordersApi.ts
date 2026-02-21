@@ -12,6 +12,6 @@ export const ordersApi = {
     api.post<CreateOrderResponse>('/orders', data, { requiresAuth: false }),
 
   /** Listar encomendas (admin) */
-  list: (page = 1) =>
-    api.get<PaginatedResponse<ApiOrder>>(`/orders?page=${page}`),
+  list: (page = 1, perPage = 10) =>
+    api.get<PaginatedResponse<ApiOrder>>(`/orders?page=${page}&per_page=${perPage}`),
 };

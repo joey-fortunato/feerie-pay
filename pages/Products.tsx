@@ -10,7 +10,7 @@ import { ConfirmModal } from '../components/ConfirmModal';
 import { ApiError } from '../services/api';
 
 export const Products: React.FC = () => {
-  const { isAdmin } = useAuth();
+  const { canEditProducts } = useAuth();
   const toast = useToast();
   const [viewMode, setViewMode] = useState<'list' | 'editing'>('list');
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -296,7 +296,7 @@ export const Products: React.FC = () => {
           product={editingProduct}
           onBack={() => { setViewMode('list'); setEditingProduct(null); }}
           onSave={handleSaveEditedProduct}
-          onSaveToApi={isAdmin ? handleSaveToApi(editingProduct.id) : undefined}
+          onSaveToApi={canEditProducts ? handleSaveToApi(editingProduct.id) : undefined}
         />
       </div>
     );
@@ -427,7 +427,7 @@ export const Products: React.FC = () => {
               </>
             )}
           </div>
-          {isAdmin && (
+          {canEditProducts && (
             <button
               onClick={() => {
                 setFormError(null);
@@ -543,14 +543,16 @@ export const Products: React.FC = () => {
                         >
                           {copiedId === product.id ? <CheckCircle size={16} /> : <Link size={16} />}
                         </button>
-                        <button
-                          onClick={() => handleEditClick(product)}
-                          className="p-2 text-gray-400 hover:text-brand-primary hover:bg-indigo-50 rounded-lg transition-colors"
-                          title="Editar"
-                        >
-                          <Edit3 size={16} />
-                        </button>
-                        {isAdmin && (
+                        {canEditProducts && (
+                          <button
+                            onClick={() => handleEditClick(product)}
+                            className="p-2 text-gray-400 hover:text-brand-primary hover:bg-indigo-50 rounded-lg transition-colors"
+                            title="Editar"
+                          >
+                            <Edit3 size={16} />
+                          </button>
+                        )}
+                        {canEditProducts && (
                           <button
                             onClick={() => handleDeleteClick(product)}
                             className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
@@ -613,7 +615,7 @@ export const Products: React.FC = () => {
                 Limpar filtros
               </button>
             ) : (
-              isAdmin && (
+              canEditProducts && (
                 <button
                   onClick={() => setIsModalOpen(true)}
                   className="mt-6 px-4 py-2 bg-brand-primary text-white font-semibold text-sm rounded-xl hover:bg-brand-hover"
