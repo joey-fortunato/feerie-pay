@@ -1,10 +1,9 @@
-
 import React, { useState } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { Dashboard } from './pages/Dashboard';
 import { Transactions } from './pages/Transactions';
-import { Products } from './pages/Products'; 
+import { Products } from './pages/Products';
 import { Checkout } from './pages/Checkout';
 import { PaymentLinks } from './pages/PaymentLinks';
 import { Clients } from './pages/Clients';
@@ -14,9 +13,10 @@ import { Team } from './pages/Team';
 import { Profile } from './pages/Profile';
 import { Login } from './pages/Login';
 import { ViewState } from './types';
+import { useAuth } from './contexts/AuthContext';
 
 const App: React.FC = () => {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const { isAuthenticated, isLoading } = useAuth();
   const [currentView, setCurrentView] = useState<ViewState>('dashboard');
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
@@ -37,9 +37,21 @@ const App: React.FC = () => {
     );
   }
 
+  // Loading: verificar sessão
+  if (isLoading) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center bg-bg-main">
+        <div className="animate-pulse flex flex-col items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-brand-primary/20" />
+          <p className="text-sm text-gray-500">A carregar...</p>
+        </div>
+      </div>
+    );
+  }
+
   // Authentication Check
   if (!isAuthenticated) {
-    return <Login onLogin={() => setIsAuthenticated(true)} />;
+    return <Login onLogin={() => {}} />;
   }
 
   const renderContent = () => {

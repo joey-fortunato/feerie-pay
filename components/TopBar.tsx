@@ -1,6 +1,7 @@
 
 import React from 'react';
 import { Search, Bell, Menu } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 
 interface TopBarProps {
   onMenuClick: () => void;
@@ -8,7 +9,17 @@ interface TopBarProps {
   title: string;
 }
 
+function getInitials(name: string): string {
+  return name
+    .split(/\s+/)
+    .map((w) => w[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2);
+}
+
 export const TopBar: React.FC<TopBarProps> = ({ onMenuClick, onProfileClick, title }) => {
+  const { user } = useAuth();
   return (
     <header className="h-20 bg-bg-main/50 backdrop-blur-md flex-shrink-0 flex items-center justify-between px-6 lg:px-10 border-b border-transparent lg:border-gray-100/50 z-20">
       <div className="flex items-center gap-4">
@@ -39,16 +50,16 @@ export const TopBar: React.FC<TopBarProps> = ({ onMenuClick, onProfileClick, tit
         </button>
 
         {/* Profile */}
-        <div 
+        <div
           onClick={onProfileClick}
           className="flex items-center gap-3 pl-2 lg:pl-4 lg:border-l border-gray-200 cursor-pointer group"
         >
           <div className="text-right hidden sm:block group-hover:opacity-80 transition-opacity">
-            <p className="text-sm font-bold text-dark-text leading-none mb-1">João Manuel</p>
-            <p className="text-xs text-gray-500">Loja Luanda</p>
+            <p className="text-sm font-bold text-dark-text leading-none mb-1">{user?.name ?? 'Utilizador'}</p>
+            <p className="text-xs text-gray-500 capitalize">{user?.role ?? '—'}</p>
           </div>
           <div className="w-10 h-10 rounded-full bg-gradient-to-br from-brand-primary to-purple-600 flex items-center justify-center text-white text-sm font-bold shadow-md border-2 border-white group-hover:shadow-lg transition-all">
-            JM
+            {user ? getInitials(user.name) : '—'}
           </div>
         </div>
       </div>

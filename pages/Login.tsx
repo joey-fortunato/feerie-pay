@@ -1,29 +1,45 @@
-
 import React, { useState } from 'react';
 import { Eye, EyeOff, Loader2, ArrowRight, CheckCircle, Zap, ShieldCheck } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 
 interface LoginProps {
   onLogin: () => void;
 }
 
 export const Login: React.FC<LoginProps> = ({ onLogin }) => {
-  const [isSignUp, setIsSignUp] = useState(false);
+  const { login } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  
-  // Form State
+  const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
+    setFieldErrors({});
     setIsLoading(true);
-    
-    // Simulate API Call
-    setTimeout(() => {
-      setIsLoading(false);
+
+    const result = await login(email, password);
+    setIsLoading(false);
+
+    if (result.success) {
       onLogin();
-    }, 1500);
+      return;
+    }
+
+    if (result.errors) {
+      const map: Record<string, string> = {};
+      for (const [k, v] of Object.entries(result.errors)) {
+        map[k] = Array.isArray(v) ? v[0] : String(v);
+      }
+      setFieldErrors(map);
+      setError(result.error || 'Verifique os campos.');
+    } else {
+      setError(result.error || 'Erro ao fazer login.');
+    }
   };
 
   return (
@@ -98,55 +114,47 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
             </div>
 
             <div className="text-center lg:text-left">
-               <h2 className="text-3xl font-bold text-dark-text mb-2">
-                  {isSignUp ? 'Crie sua conta grátis' : 'Bem-vindo de volta!'}
-               </h2>
-               <p className="text-gray-500">
-                  {isSignUp 
-                    ? 'Comece a vender online em menos de 5 minutos.' 
-                    : 'Insira seus dados para acessar o painel.'}
-               </p>
+               <h2 className="text-3xl font-bold text-dark-text mb-2">Bem-vindo de volta!</h2>
+               <p className="text-gray-500">Insira seus dados para acessar o painel.</p>
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-5">
-               
-               {isSignUp && (
-                 <div className="space-y-1.5 animate-fade-in">
-                    <label className="text-xs font-bold text-gray-600 uppercase tracking-wide">Nome Completo</label>
-                    <input 
-                      type="text" 
-                      className="w-full px-4 py-3.5 rounded-xl border border-gray-200 bg-white focus:border-brand-primary focus:ring-4 focus:ring-brand-primary/10 outline-none transition-all"
-                      placeholder="Ex: João Manuel"
-                      required
-                    />
-                 </div>
-               )}
+            {error && (
+              <div className="p-4 rounded-xl bg-red-50 border border-red-100 text-red-700 text-sm">
+                {error}
+              </div>
+            )}
 
+            <form onSubmit={handleSubmit} className="space-y-5">
                <div className="space-y-1.5">
                   <label className="text-xs font-bold text-gray-600 uppercase tracking-wide">Email Profissional</label>
                   <input 
                     type="email" 
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full px-4 py-3.5 rounded-xl border border-gray-200 bg-white focus:border-brand-primary focus:ring-4 focus:ring-brand-primary/10 outline-none transition-all"
+                    onChange={(e) => { setEmail(e.target.value); setFieldErrors((p) => ({ ...p, email: '' })); }}
+                    className={`w-full px-4 py-3.5 rounded-xl border bg-white focus:border-brand-primary focus:ring-4 focus:ring-brand-primary/10 outline-none transition-all ${
+                      fieldErrors.email ? 'border-red-300' : 'border-gray-200'
+                    }`}
                     placeholder="nome@empresa.com"
                     required
                   />
+                  {fieldErrors.email && (
+                    <p className="text-xs text-red-600">{fieldErrors.email}</p>
+                  )}
                </div>
 
                <div className="space-y-1.5">
                   <div className="flex justify-between items-center">
                      <label className="text-xs font-bold text-gray-600 uppercase tracking-wide">Senha</label>
-                     {!isSignUp && (
-                       <a href="#" className="text-xs font-bold text-brand-primary hover:underline">Esqueceu a senha?</a>
-                     )}
+                     <a href="#" className="text-xs font-bold text-brand-primary hover:underline">Esqueceu a senha?</a>
                   </div>
                   <div className="relative">
                      <input 
                         type={showPassword ? "text" : "password"}
                         value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        className="w-full pl-4 pr-12 py-3.5 rounded-xl border border-gray-200 bg-white focus:border-brand-primary focus:ring-4 focus:ring-brand-primary/10 outline-none transition-all"
+                        onChange={(e) => { setPassword(e.target.value); setFieldErrors((p) => ({ ...p, password: '' })); }}
+                        className={`w-full pl-4 pr-12 py-3.5 rounded-xl border bg-white focus:border-brand-primary focus:ring-4 focus:ring-brand-primary/10 outline-none transition-all ${
+                          fieldErrors.password ? 'border-red-300' : 'border-gray-200'
+                        }`}
                         placeholder="••••••••"
                         required
                      />
@@ -158,6 +166,9 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                         {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
                      </button>
                   </div>
+                  {fieldErrors.password && (
+                    <p className="text-xs text-red-600">{fieldErrors.password}</p>
+                  )}
                </div>
 
                <button 
@@ -172,38 +183,15 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                      </>
                   ) : (
                      <>
-                        {isSignUp ? 'Criar Conta' : 'Entrar no Painel'}
+                        Entrar no Painel
                         <ArrowRight size={20} />
                      </>
                   )}
                </button>
             </form>
             
-            <div className="relative">
-               <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-gray-200"></div>
-               </div>
-               <div className="relative flex justify-center text-sm">
-                  <span className="px-2 bg-bg-main text-gray-500">ou</span>
-               </div>
-            </div>
-
-            <div className="text-center space-y-4">
-               <p className="text-sm text-gray-600">
-                  {isSignUp ? 'Já tem uma conta?' : 'Não tem uma conta ainda?'}
-                  <button 
-                     onClick={() => {
-                        setIsSignUp(!isSignUp);
-                        setEmail('');
-                        setPassword('');
-                     }}
-                     className="ml-2 font-bold text-brand-primary hover:underline"
-                  >
-                     {isSignUp ? 'Fazer Login' : 'Cadastre-se Grátis'}
-                  </button>
-               </p>
-               
-               <div className="flex items-center justify-center gap-2 text-xs text-gray-400 pt-4">
+            <div className="text-center space-y-4 pt-2">
+               <div className="flex items-center justify-center gap-2 text-xs text-gray-400">
                   <ShieldCheck size={14} />
                   Seus dados estão protegidos e criptografados.
                </div>

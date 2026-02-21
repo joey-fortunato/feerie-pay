@@ -2,6 +2,7 @@
 import React from 'react';
 import { LayoutDashboard, ShoppingCart, CreditCard, Settings, LogOut, Package, Zap, Link as LinkIcon, Users, TicketPercent, PieChart, Shield } from 'lucide-react';
 import { ViewState } from '../types';
+import { useAuth } from '../contexts/AuthContext';
 
 interface SidebarProps {
   currentView: ViewState;
@@ -11,6 +12,7 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, mobileOpen, setMobileOpen }) => {
+  const { logout } = useAuth();
   const navItems = [
     { id: 'dashboard' as ViewState, label: 'Dashboard', icon: LayoutDashboard },
     { id: 'reports' as ViewState, label: 'Relatórios', icon: PieChart },
@@ -105,10 +107,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, mob
 
         {/* Footer / Logout (Fixed Bottom) */}
         <div className="p-4 flex-shrink-0 border-t border-gray-100 bg-bg-surface">
-          <div className="flex items-center space-x-3 px-4 py-3 text-red-500 hover:bg-red-50 rounded-xl cursor-pointer transition-colors font-medium">
+          <button
+            type="button"
+            onClick={() => logout()}
+            className="flex items-center space-x-3 px-4 py-3 w-full text-red-500 hover:bg-red-50 rounded-xl cursor-pointer transition-colors font-medium"
+          >
             <LogOut size={20} />
             <span>Sair da Conta</span>
-          </div>
+          </button>
         </div>
       </aside>
     </>
