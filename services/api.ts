@@ -10,6 +10,29 @@ const raw = env?.VITE_API_BASE_URL;
 const API_BASE =
   typeof raw === 'string' && raw.startsWith('http') ? raw : '/api/v1';
 
+/**
+ * Converte mensagens técnicas do backend em mensagens amigáveis para o utilizador.
+ */
+export function getFriendlyErrorMessage(message: string): string {
+  const lower = message.toLowerCase();
+  if (lower.includes('duplicate entry') && (lower.includes('phone') || lower.includes('customers_phone_unique'))) {
+    return 'Já existe um cliente com este número de telefone.';
+  }
+  if (lower.includes('duplicate entry') && (lower.includes('email') || lower.includes('customers_email_unique'))) {
+    return 'Já existe um cliente com este email.';
+  }
+  if (lower.includes('duplicate') && lower.includes('unique')) {
+    return 'Este registo já existe. Verifique se o email ou telefone não estão em uso.';
+  }
+  if (lower.includes('integrity constraint violation')) {
+    return 'Não foi possível guardar. Pode haver dados duplicados (email ou telefone já em uso).';
+  }
+  if (lower.includes('sqlstate') || lower.includes('connection: mysql')) {
+    return 'Ocorreu um erro ao guardar. Tente novamente ou contacte o suporte.';
+  }
+  return message;
+}
+
 /** Erro estruturado da API */
 export class ApiError extends Error {
   constructor(

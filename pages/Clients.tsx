@@ -9,7 +9,7 @@ import { apiCustomerToClient } from '../lib/customerMapper';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { ConfirmModal } from '../components/ConfirmModal';
-import { ApiError } from '../services/api';
+import { ApiError, getFriendlyErrorMessage } from '../services/api';
 import type { ApiCustomer } from '../api/types';
 import type { CustomerStatus } from '../api/types';
 
@@ -67,7 +67,7 @@ export const Clients: React.FC = () => {
         last_page: lastPage,
       });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Erro ao carregar clientes.');
+      setError(getFriendlyErrorMessage(err instanceof ApiError ? err.message : 'Erro ao carregar clientes.'));
       console.error('[Clients] fetchCustomers error:', err);
     } finally {
       setIsLoading(false);
@@ -110,9 +110,9 @@ export const Clients: React.FC = () => {
     } catch (err) {
       if (err instanceof ApiError && err.errors) {
         const first = Object.values(err.errors).flat()[0];
-        setFormError(first || err.message);
+        setFormError(first ? getFriendlyErrorMessage(first) : getFriendlyErrorMessage(err.message));
       } else {
-        setFormError(err instanceof ApiError ? err.message : 'Erro ao criar cliente.');
+        setFormError(getFriendlyErrorMessage(err instanceof ApiError ? err.message : 'Erro ao criar cliente.'));
       }
     } finally {
       setIsCreating(false);
@@ -144,7 +144,7 @@ export const Clients: React.FC = () => {
       });
       fetchCustomers(currentPage);
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : 'Erro ao atualizar cliente.');
+      toast.error(getFriendlyErrorMessage(err instanceof ApiError ? err.message : 'Erro ao atualizar cliente.'));
     } finally {
       setIsUpdating(false);
     }
@@ -160,7 +160,7 @@ export const Clients: React.FC = () => {
       setSelectedClient(null);
       fetchCustomers(currentPage);
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : 'Erro ao apagar cliente.');
+      toast.error(getFriendlyErrorMessage(err instanceof ApiError ? err.message : 'Erro ao apagar cliente.'));
     } finally {
       setIsDeleting(false);
     }

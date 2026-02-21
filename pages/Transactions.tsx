@@ -3,19 +3,12 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Download, Filter, Plus, X, User, Link, Tag, DollarSign, ChevronRight, Copy, CornerUpLeft, Send, FileText, Smartphone, CreditCard, Wallet, Loader2, AlertCircle, Clock, CheckCircle, Receipt } from 'lucide-react';
 import { Transaction, TransactionStatus } from '../types';
 import { ordersApi } from '../services/ordersApi';
+import { customersApi } from '../services/customersApi';
 import { apiOrderToTransaction, type OrderDisplay, formatDateTime } from '../lib/orderMapper';
-import { ApiError } from '../services/api';
+import { ApiError, getFriendlyErrorMessage } from '../services/api';
 import { productsApi } from '../services/productsApi';
 import { useToast } from '../contexts/ToastContext';
-import type { ApiProduct } from '../api/types';
-
-// Mock Data for Create Charge modal dropdowns (quando não houver API de clientes)
-const mockCustomers = [
-  { id: 1, name: 'Mario Baptista' },
-  { id: 2, name: 'Luisa Paulo' },
-  { id: 3, name: 'José Eduardo' },
-  { id: 4, name: 'Ana Maria' },
-];
+import type { ApiProduct, ApiCustomer } from '../api/types';
 
 const StatusBadge = ({ status }: { status: TransactionStatus }) => {
   switch (status) {
@@ -56,13 +49,6 @@ const MethodIcon = ({ method }: { method: string }) => {
    );
 };
 
-const mockProducts = [
-  { id: '1', name: 'E-book: Dominando o E-kwanza', price: 8000 },
-  { id: '2', name: 'Livro: Empreendedorismo', price: 15000 },
-  { id: '3', name: 'Curso: Marketing Digital', price: 25000 },
-  { id: '4', name: 'Mentoria Individual', price: 50000 },
-];
-
 export const Transactions: React.FC = () => {
   const toast = useToast();
   const [isChargeModalOpen, setIsChargeModalOpen] = useState(false);
@@ -77,7 +63,8 @@ export const Transactions: React.FC = () => {
     total: number;
     last_page: number;
   } | null>(null);
-  const [productsForModal, setProductsForModal] = useState<{ id: string; name: string; price: number }[]>(mockProducts);
+  const [productsForModal, setProductsForModal] = useState<{ id: string; name: string; price: number }[]>([]);
+  const [customersForModal, setCustomersForModal] = useState<ApiCustomer[]>([]);
 
   const fetchOrders = useCallback(async (page: number) => {
     setIsLoading(true);
@@ -99,7 +86,7 @@ export const Transactions: React.FC = () => {
         last_page: lastPage,
       });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Erro ao carregar transações.');
+      setError(getFriendlyErrorMessage(err instanceof ApiError ? err.message : 'Erro ao carregar transações.'));
       console.error('[Transactions] fetchOrders error:', err);
     } finally {
       setIsLoading(false);
@@ -123,10 +110,22 @@ export const Transactions: React.FC = () => {
     }).catch(() => {});
   }, []);
 
+  useEffect(() => {
+    customersApi.list(1, 100).then((r) => {
+      const list = Array.isArray(r?.data) ? r.data : [];
+      setCustomersForModal(list as ApiCustomer[]);
+    }).catch(() => {});
+  }, []);
+
   const [formStep, setFormStep] = useState<'existing_client' | 'new_client'>('existing_client');
   const [selectedProduct, setSelectedProduct] = useState<string>('');
   const [productPrice, setProductPrice] = useState<number | string>('');
   const [enableCoupons, setEnableCoupons] = useState(false);
+  const [chargeForm, setChargeForm] = useState({ name: '', email: '', phone: '', couponCode: '' });
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
+  const [chargeGateway, setChargeGateway] = useState<'ekwanza' | 'appypay'>('ekwanza');
+  const [isCreatingOrder, setIsCreatingOrder] = useState(false);
+  const [chargeFormError, setChargeFormError] = useState<string | null>(null);
 
   const handleProductChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const prodId = e.target.value;
@@ -136,6 +135,56 @@ export const Transactions: React.FC = () => {
       setProductPrice(product.price);
     } else {
       setProductPrice('');
+    }
+  };
+
+  const handleCustomerSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const id = e.target.value;
+    setSelectedCustomerId(id);
+    if (id) {
+      const c = customersForModal.find((x) => x.id === id);
+      if (c) {
+        setChargeForm({ ...chargeForm, name: c.name, email: c.email, phone: c.phone ?? '' });
+      }
+    }
+  };
+
+  const handleCreateCharge = async () => {
+    setChargeFormError(null);
+    const name = formStep === 'existing_client' && selectedCustomerId
+      ? chargeForm.name
+      : chargeForm.name.trim();
+    const email = chargeForm.email.trim();
+    const phone = chargeForm.phone.trim();
+    if (!name || !email || !phone) {
+      setChargeFormError('Nome, email e telefone são obrigatórios.');
+      return;
+    }
+    if (!selectedProduct) {
+      setChargeFormError('Selecione um produto.');
+      return;
+    }
+    setIsCreatingOrder(true);
+    try {
+      await ordersApi.create({
+        name,
+        email,
+        phone,
+        product_id: selectedProduct,
+        coupon_code: enableCoupons && chargeForm.couponCode.trim() ? chargeForm.couponCode.trim() : undefined,
+        gateway: chargeGateway,
+      });
+      toast.success('Cobrança criada. O cliente receberá o link de pagamento.');
+      setIsChargeModalOpen(false);
+      setChargeForm({ name: '', email: '', phone: '', couponCode: '' });
+      setSelectedCustomerId('');
+      setSelectedProduct('');
+      setProductPrice('');
+      fetchOrders(currentPage);
+    } catch (err) {
+      setChargeFormError(getFriendlyErrorMessage(err instanceof ApiError ? err.message : 'Erro ao criar cobrança.'));
+    } finally {
+      setIsCreatingOrder(false);
     }
   };
 
@@ -572,8 +621,15 @@ export const Transactions: React.FC = () => {
                  <span className="text-sm font-medium text-gray-700 pl-2">Cliente</span>
                  <div className="flex items-center gap-3">
                     <span className="text-xs text-gray-500 font-medium">Cadastrar novo cliente</span>
-                    <button 
-                      onClick={() => setFormStep(formStep === 'existing_client' ? 'new_client' : 'existing_client')}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormStep(formStep === 'existing_client' ? 'new_client' : 'existing_client');
+                        if (formStep === 'existing_client') {
+                          setSelectedCustomerId('');
+                          setChargeForm({ name: '', email: '', phone: '', couponCode: chargeForm.couponCode });
+                        }
+                      }}
                       className={`w-11 h-6 rounded-full p-1 transition-colors duration-300 ease-in-out ${formStep === 'new_client' ? 'bg-brand-primary' : 'bg-gray-300'}`}
                     >
                       <div className={`bg-white w-4 h-4 rounded-full shadow-sm transform transition-transform duration-300 ${formStep === 'new_client' ? 'translate-x-5' : 'translate-x-0'}`} />
@@ -582,36 +638,64 @@ export const Transactions: React.FC = () => {
               </div>
 
               {/* Customer Form Fields */}
+              {chargeFormError && (
+                <div className="p-3 bg-red-50 border border-red-100 rounded-xl text-red-700 text-sm">{chargeFormError}</div>
+              )}
               {formStep === 'existing_client' ? (
                 <div className="space-y-2">
                    <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Selecionar um cliente</label>
                    <div className="relative">
                       <User size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                      <select className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-200 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all bg-white appearance-none text-gray-600">
+                      <select
+                        value={selectedCustomerId}
+                        onChange={handleCustomerSelect}
+                        className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-200 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all bg-white appearance-none text-gray-600"
+                      >
                         <option value="">Selecione um cliente...</option>
-                        {mockCustomers.map(c => (
-                          <option key={c.id} value={c.id}>{c.name}</option>
+                        {customersForModal.map((c) => (
+                          <option key={c.id} value={c.id}>{c.name} ({c.email})</option>
                         ))}
                       </select>
                       <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
                         <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
                       </div>
                    </div>
+                   {selectedCustomerId && (
+                     <p className="text-xs text-gray-500 mt-1">Dados preenchidos automaticamente.</p>
+                   )}
                 </div>
               ) : (
                 <div className="space-y-4 animate-fade-in">
                    <div className="space-y-2">
                       <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Nome Completo</label>
-                      <input type="text" placeholder="Nome do cliente" className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all" />
+                      <input
+                        type="text"
+                        value={chargeForm.name}
+                        onChange={(e) => setChargeForm({ ...chargeForm, name: e.target.value })}
+                        placeholder="Nome do cliente"
+                        className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all"
+                      />
                    </div>
                    <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Email</label>
-                        <input type="email" placeholder="email@exemplo.com" className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all" />
+                        <input
+                          type="email"
+                          value={chargeForm.email}
+                          onChange={(e) => setChargeForm({ ...chargeForm, email: e.target.value })}
+                          placeholder="email@exemplo.com"
+                          className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all"
+                        />
                       </div>
                       <div className="space-y-2">
                         <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Telefone</label>
-                        <input type="tel" placeholder="9XX XXX XXX" className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all" />
+                        <input
+                          type="tel"
+                          value={chargeForm.phone}
+                          onChange={(e) => setChargeForm({ ...chargeForm, phone: e.target.value })}
+                          placeholder="9XX XXX XXX"
+                          className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all"
+                        />
                       </div>
                    </div>
                 </div>
@@ -660,15 +744,49 @@ export const Transactions: React.FC = () => {
                     <span className="text-sm font-medium text-dark-text">Habilitar cupom?</span>
                     <span className="text-xs text-gray-400">Permite que o cliente use códigos de desconto.</span>
                  </div>
-                 <button 
-                    onClick={() => setEnableCoupons(!enableCoupons)}
-                    className={`w-11 h-6 rounded-full p-1 transition-colors duration-300 ease-in-out ${enableCoupons ? 'bg-brand-primary' : 'bg-gray-300'}`}
-                  >
+                 <button
+                   type="button"
+                   onClick={() => setEnableCoupons(!enableCoupons)}
+                   className={`w-11 h-6 rounded-full p-1 transition-colors duration-300 ease-in-out ${enableCoupons ? 'bg-brand-primary' : 'bg-gray-300'}`}
+                 >
                     <div className={`bg-white w-4 h-4 rounded-full shadow-sm transform transition-transform duration-300 ${enableCoupons ? 'translate-x-5' : 'translate-x-0'}`} />
                   </button>
               </div>
+              {enableCoupons && (
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Código do cupom</label>
+                  <input
+                    type="text"
+                    value={chargeForm.couponCode}
+                    onChange={(e) => setChargeForm({ ...chargeForm, couponCode: e.target.value })}
+                    placeholder="Ex: PROMO10"
+                    className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all"
+                  />
+                </div>
+              )}
 
-               {/* URLs */}
+              {/* Gateway */}
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Gateway de pagamento</label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setChargeGateway('ekwanza')}
+                    className={`flex-1 py-2.5 rounded-xl border-2 text-sm font-bold transition-all ${chargeGateway === 'ekwanza' ? 'border-brand-primary bg-indigo-50 text-brand-primary' : 'border-gray-200 text-gray-500 hover:border-gray-300'}`}
+                  >
+                    E-Kwanza
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setChargeGateway('appypay')}
+                    className={`flex-1 py-2.5 rounded-xl border-2 text-sm font-bold transition-all ${chargeGateway === 'appypay' ? 'border-brand-primary bg-indigo-50 text-brand-primary' : 'border-gray-200 text-gray-500 hover:border-gray-300'}`}
+                  >
+                    AppyPay
+                  </button>
+                </div>
+              </div>
+
+               {/* URLs (opcional - não enviado à API) */}
                <div className="space-y-4 pt-2">
                    <div className="space-y-2">
                       <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1">
@@ -690,16 +808,21 @@ export const Transactions: React.FC = () => {
 
             {/* Footer */}
             <div className="px-6 py-4 bg-gray-50 rounded-b-2xl flex justify-between gap-3 flex-shrink-0 border-t border-gray-100">
-               <button 
-                onClick={() => setIsChargeModalOpen(false)}
-                className="px-6 py-2.5 text-sm font-semibold text-gray-600 hover:bg-gray-200 rounded-xl transition-colors w-full sm:w-auto"
+               <button
+                 type="button"
+                 onClick={() => { setIsChargeModalOpen(false); setChargeFormError(null); }}
+                 className="px-6 py-2.5 text-sm font-semibold text-gray-600 hover:bg-gray-200 rounded-xl transition-colors w-full sm:w-auto"
                >
                  Voltar
                </button>
-               <button 
-                className="px-6 py-2.5 text-sm font-bold text-white bg-brand-primary hover:bg-brand-hover rounded-xl shadow-md shadow-indigo-200 transition-all w-full sm:w-auto"
+               <button
+                 type="button"
+                 onClick={handleCreateCharge}
+                 disabled={isCreatingOrder}
+                 className="px-6 py-2.5 text-sm font-bold text-white bg-brand-primary hover:bg-brand-hover rounded-xl shadow-md shadow-indigo-200 transition-all w-full sm:w-auto disabled:opacity-70 flex items-center gap-2"
                >
-                 Salvar
+                 {isCreatingOrder && <Loader2 size={16} className="animate-spin" />}
+                 Criar Cobrança
                </button>
             </div>
 

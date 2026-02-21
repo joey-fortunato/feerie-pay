@@ -2,9 +2,12 @@
 import React, { useState, useEffect } from 'react';
 import { Lock, Check, ShieldCheck, Smartphone, CreditCard, Loader2, Timer, AlertCircle, User, Mail, Phone, Wallet } from 'lucide-react';
 import { ekwanzaApi } from '../services/ekwanzaApi';
+import { ordersApi } from '../services/ordersApi';
+import { productsApi } from '../services/productsApi';
 import { EKwanzaStatus } from '../types';
+import type { ApiProduct } from '../api/types';
 
-export const Checkout: React.FC = () => {
+export const Checkout: React.FC<{ productId?: string }> = ({ productId: propProductId }) => {
   // Steps: 1: Checkout (Info + Payment), 2: Waiting Payment (É-kwanza/MCX), 3: Success
   const [step, setStep] = useState(1);
   const [paymentMethod, setPaymentMethod] = useState<'ekwanza' | 'card' | 'multicaixa_express'>('multicaixa_express');
@@ -18,13 +21,30 @@ export const Checkout: React.FC = () => {
     phone: ''
   });
 
+  // Product (for order creation)
+  const [products, setProducts] = useState<ApiProduct[]>([]);
+  const [selectedProductId, setSelectedProductId] = useState<string>(propProductId || '');
+  const [orderCreated, setOrderCreated] = useState<{ orderId: string; total: string } | null>(null);
+
+  useEffect(() => {
+    productsApi.list(1, 50).then((r) => {
+      const list = Array.isArray(r?.data) ? r.data : [];
+      const arr = list as ApiProduct[];
+      setProducts(arr);
+      if (propProductId) setSelectedProductId(propProductId);
+      else if (arr.length > 0) setSelectedProductId((prev) => prev || arr[0].id);
+    }).catch(() => {});
+  }, [propProductId]);
+
+  const selectedProduct = products.find((p) => p.id === selectedProductId);
+  const basePrice = selectedProduct ? parseFloat(selectedProduct.price) : 25000;
+  const bumpPrice = 5000;
+
   // É-kwanza State
   const [ekwanzaCode, setEkwanzaCode] = useState<string | null>(null);
   const [pollIntervalId, setPollIntervalId] = useState<any>(null);
 
   // Derived State
-  const basePrice = 25000;
-  const bumpPrice = 5000;
   const total = basePrice + (orderBump ? bumpPrice : 0);
 
   // Cleanup polling on unmount
@@ -61,13 +81,36 @@ export const Checkout: React.FC = () => {
 
   const handlePayment = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (products.length === 0) {
+      alert('Nenhum produto disponível. Adicione produtos primeiro.');
+      return;
+    }
+    if (!selectedProductId || !formData.name.trim() || !formData.email.trim() || !formData.phone.trim()) {
+      alert('Preencha nome, email e telefone.');
+      return;
+    }
     setLoading(true);
+
+    try {
+      const res = await ordersApi.create({
+        name: formData.name.trim(),
+        email: formData.email.trim(),
+        phone: formData.phone.trim(),
+        product_id: selectedProductId,
+        gateway: paymentMethod === 'ekwanza' ? 'ekwanza' : 'appypay',
+      });
+      setOrderCreated({ orderId: res.order.id, total: res.order.total });
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Erro ao criar pedido.');
+      setLoading(false);
+      return;
+    }
 
     if (paymentMethod === 'ekwanza') {
       try {
         const response = await ekwanzaApi.createPaymentTicket({
           amount: total,
-          referenceCode: `ORD-${Math.floor(Math.random() * 10000)}`,
+          referenceCode: orderCreated?.orderId || `ORD-${Math.floor(Math.random() * 10000)}`,
           mobileNumber: formData.phone
         });
 
@@ -108,11 +151,11 @@ export const Checkout: React.FC = () => {
           </div>
           <h2 className="text-2xl font-bold text-dark-text mb-2">Pagamento Confirmado!</h2>
           <p className="text-gray-500 mb-8">Enviamos os detalhes do seu acesso para o e-mail <b>{formData.email}</b>.</p>
-          <div className="bg-gray-50 p-4 rounded-xl mb-6 text-left">
-            <div className="flex justify-between mb-2 text-sm">
-              <span className="text-gray-500">Referência:</span>
-              <span className="font-medium">#ORD-8829</span>
-            </div>
+            <div className="bg-gray-50 p-4 rounded-xl mb-6 text-left">
+              <div className="flex justify-between mb-2 text-sm">
+                <span className="text-gray-500">Referência:</span>
+                <span className="font-medium">#{orderCreated?.orderId || '—'}</span>
+              </div>
             <div className="flex justify-between text-sm">
               <span className="text-gray-500">Método:</span>
               <span className="font-medium capitalize">
@@ -150,8 +193,8 @@ export const Checkout: React.FC = () => {
           </div>
 
           <div className="mb-8">
-            <h1 className="text-3xl lg:text-4xl font-bold mb-4">Curso Completo: Marketing Digital em Angola</h1>
-            <p className="text-gray-300 text-lg leading-relaxed">Aprenda a vender na internet usando e-kwanza e estratégias locais. Acesso vitalício e suporte na comunidade.</p>
+            <h1 className="text-3xl lg:text-4xl font-bold mb-4">{selectedProduct?.name || 'Produto'}</h1>
+            <p className="text-gray-300 text-lg leading-relaxed">Checkout seguro via Feerie Pay. Acesso vitalício e suporte.</p>
           </div>
 
           <div className="flex items-center gap-4 mb-8">
@@ -271,6 +314,21 @@ export const Checkout: React.FC = () => {
               <h2 className="text-2xl font-bold text-dark-text">Finalizar Compra</h2>
               <p className="text-gray-500 text-sm">Preencha seus dados e escolha como pagar.</p>
             </div>
+
+            {products.length > 1 && (
+              <div className="space-y-2 mb-4">
+                <label className="text-sm font-semibold text-gray-700">Produto</label>
+                <select
+                  value={selectedProductId}
+                  onChange={(e) => setSelectedProductId(e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none bg-white"
+                >
+                  {products.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name} — Kz {parseFloat(p.price).toLocaleString()}</option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             {/* Personal Info - Compact */}
             <div className="space-y-3">
