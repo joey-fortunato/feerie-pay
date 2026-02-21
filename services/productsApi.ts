@@ -3,8 +3,8 @@ import type { PaginatedResponse } from './api';
 import { api } from './api';
 
 export const productsApi = {
-  list: (page = 1) =>
-    api.get<PaginatedResponse<ApiProduct>>(`/products?page=${page}`),
+  list: (page = 1, perPage = 10) =>
+    api.get<PaginatedResponse<ApiProduct>>(`/products?page=${page}&per_page=${perPage}`),
 
   get: (id: string) =>
     api.get<ApiProduct>(`/products/${id}`),

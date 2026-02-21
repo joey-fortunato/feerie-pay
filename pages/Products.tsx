@@ -20,6 +20,13 @@ export const Products: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<string>('');
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [products, setProducts] = useState<Product[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [paginationMeta, setPaginationMeta] = useState<{
+    current_page: number;
+    per_page: number;
+    total: number;
+    last_page: number;
+  } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -63,15 +70,27 @@ export const Products: React.FC = () => {
     archived: 'Arquivado',
   };
 
-  const fetchProducts = useCallback(async () => {
+  const fetchProducts = useCallback(async (page: number) => {
     setIsLoading(true);
     setError(null);
     try {
-      const res = await productsApi.list(1);
-      const mapped = res.data.map(apiProductToProduct);
+      const res = (await productsApi.list(page, 10)) as unknown as Record<string, unknown>;
+      const data = Array.isArray(res?.data) ? res.data : [];
+      const meta = (res?.meta ?? res) as Record<string, unknown> | undefined;
+      const total = Number(meta?.total ?? data.length) || 0;
+      const perPage = Number(meta?.per_page ?? 10) || 10;
+      const currentPageNum = Number(meta?.current_page ?? page) || 1;
+      const lastPage = Number(meta?.last_page) || Math.max(1, Math.ceil(total / perPage));
+      const mapped = data.map(apiProductToProduct);
       setProducts(mapped);
+      setPaginationMeta({
+        current_page: currentPageNum,
+        per_page: perPage,
+        total,
+        last_page: lastPage,
+      });
 
-      const statusesFromApi = [...new Set(res.data.map((p) => p.status).filter(Boolean))] as string[];
+      const statusesFromApi = [...new Set(data.map((p) => p.status).filter(Boolean))] as string[];
       const defaultStatuses = ['active', 'draft'];
       const allStatuses = [...new Set([...defaultStatuses, ...statusesFromApi])];
       setProductStatuses(
@@ -81,15 +100,21 @@ export const Products: React.FC = () => {
         }))
       );
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Erro ao carregar produtos.');
+      const msg = err instanceof ApiError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : 'Erro ao carregar produtos. Verifique se o backend está a correr em http://localhost:8000';
+      setError(msg);
+      console.error('[Products] fetchProducts error:', err);
     } finally {
       setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchProducts();
-  }, [fetchProducts]);
+    fetchProducts(currentPage);
+  }, [currentPage, fetchProducts]);
 
   useEffect(() => {
     if (formData.cover_image) {
@@ -108,7 +133,7 @@ export const Products: React.FC = () => {
     return matchSearch && matchCategory && matchStatus;
   });
 
-  const totalProducts = products.length;
+  const totalProducts = paginationMeta ? paginationMeta.total : 0;
   const totalRevenue = products.reduce((acc, curr) => acc + curr.price * curr.sales, 0);
   const totalSalesCount = products.reduce((acc, curr) => acc + curr.sales, 0);
   const averageTicket = totalSalesCount > 0 ? totalRevenue / totalSalesCount : 0;
@@ -152,7 +177,8 @@ export const Products: React.FC = () => {
         file: null,
         cover_image: null,
       });
-      await fetchProducts();
+      setCurrentPage(1);
+      await fetchProducts(1);
       toast.success('Produto criado com sucesso.');
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : 'Erro ao criar produto.');
@@ -180,7 +206,13 @@ export const Products: React.FC = () => {
     setIsDeleting(true);
     try {
       await productsApi.delete(confirmDelete.product.id);
-      setProducts((prev) => prev.filter((p) => p.id !== confirmDelete.product.id));
+      const nextProducts = products.filter((p) => p.id !== confirmDelete.product.id);
+      if (nextProducts.length === 0 && currentPage > 1) {
+        setCurrentPage((p) => p - 1);
+        await fetchProducts(currentPage - 1);
+      } else {
+        await fetchProducts(currentPage);
+      }
       setConfirmDelete(null);
       toast.success('Produto apagado com sucesso.');
     } catch (err) {
@@ -246,7 +278,7 @@ export const Products: React.FC = () => {
     (productId: string) => async (formData: FormData): Promise<Product | void> => {
       try {
         const res = await productsApi.update(productId, formData);
-        await fetchProducts();
+        await fetchProducts(currentPage);
         toast.success('Produto atualizado com sucesso.');
         return apiProductToProduct(res);
       } catch (err) {
@@ -254,7 +286,7 @@ export const Products: React.FC = () => {
         throw err;
       }
     },
-    [toast, fetchProducts]
+    [toast, fetchProducts, currentPage]
   );
 
   if (viewMode === 'editing' && editingProduct) {
@@ -301,7 +333,7 @@ export const Products: React.FC = () => {
             <div className="w-10 h-10 bg-white border border-gray-100 rounded-lg flex items-center justify-center mb-4 shadow-sm text-emerald-600">
               <Package size={20} />
             </div>
-            <p className="text-3xl font-bold text-dark-text mb-1">{totalProducts}</p>
+            <p className="text-3xl font-bold text-dark-text mb-1">{totalProducts.toLocaleString()}</p>
             <p className="text-sm text-gray-500">
               Produtos ativos no catálogo (Livros e Cursos).
             </p>
@@ -415,7 +447,7 @@ export const Products: React.FC = () => {
           <AlertCircle size={20} />
           <span>{error}</span>
           <button
-            onClick={() => fetchProducts()}
+            onClick={() => fetchProducts(currentPage)}
             className="ml-auto text-sm font-semibold hover:underline"
           >
             Tentar novamente
@@ -533,6 +565,32 @@ export const Products: React.FC = () => {
                 ))}
               </tbody>
             </table>
+            {paginationMeta && paginationMeta.total > 0 && (
+              <div className="flex items-center justify-between px-6 py-4 border-t border-gray-100 bg-gray-50/50">
+                <p className="text-sm text-gray-500">
+                  Mostrando {(paginationMeta.current_page - 1) * paginationMeta.per_page + 1}–{Math.min(paginationMeta.current_page * paginationMeta.per_page, paginationMeta.total)} de {paginationMeta.total} produtos
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    disabled={paginationMeta.current_page <= 1}
+                    className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Anterior
+                  </button>
+                  <span className="px-3 py-2 text-sm text-gray-600">
+                    Página {paginationMeta.current_page} de {paginationMeta.last_page}
+                  </span>
+                  <button
+                    onClick={() => setCurrentPage((p) => Math.min(paginationMeta.last_page, p + 1))}
+                    disabled={paginationMeta.current_page >= paginationMeta.last_page}
+                    className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Próxima
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <div className="py-16 flex flex-col items-center justify-center text-center">

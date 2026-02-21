@@ -346,6 +346,15 @@ Todos os endpoints de produtos exigem autenticação. Apenas **admin** pode cria
 
 Lista produtos com paginação.
 
+**Query params:**
+
+| Parâmetro | Tipo | Default | Descrição |
+|-----------|------|---------|-----------|
+| page | int | 1 | Página atual |
+| per_page | int | 15 | Itens por página (máx. 50) |
+
+**Exemplo:** `GET /products?page=2&per_page=20`
+
 **Response 200:**
 ```json
 {
@@ -367,7 +376,16 @@ Lista produtos com paginação.
   "meta": {
     "current_page": 1,
     "per_page": 15,
-    "total": 10
+    "total": 10,
+    "last_page": 1,
+    "from": 1,
+    "to": 10
+  },
+  "links": {
+    "first": "...",
+    "last": "...",
+    "prev": null,
+    "next": null
   }
 }
 ```

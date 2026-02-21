@@ -32,7 +32,7 @@ export interface ApiRequestOptions extends Omit<RequestInit, 'body'> {
   skipAuthRedirect?: boolean;
 }
 
-/** Resposta paginada da API Laravel */
+/** Resposta paginada da API Laravel (conforme API-INTEGRACAO-FRONTEND.md) */
 export interface PaginatedResponse<T> {
   data: T[];
   meta: {
