@@ -95,11 +95,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch (err: unknown) {
         const { ApiError } = await import('../services/api');
         if (err instanceof ApiError) {
+          // 401: mensagens da API — "Email não encontrado ou inválido.", "Password incorreta."
           if (err.status === 401) {
-            return { success: false, error: 'Credenciais inválidas.' };
+            return {
+              success: false,
+              error: err.message,
+              errors: err.errors,
+            };
           }
-          if (err.status === 422 && err.errors) {
-            return { success: false, errors: err.errors };
+          // 422: validação — "O email é obrigatório.", etc.
+          if (err.status === 422) {
+            return {
+              success: false,
+              error: err.message,
+              errors: err.errors,
+            };
+          }
+          // 429: rate limit — "Muitas tentativas. Aguarde antes de tentar novamente."
+          if (err.status === 429) {
+            return { success: false, error: err.message };
           }
           return { success: false, error: err.message };
         }

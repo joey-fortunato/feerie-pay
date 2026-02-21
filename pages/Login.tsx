@@ -36,7 +36,8 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
         map[k] = Array.isArray(v) ? v[0] : String(v);
       }
       setFieldErrors(map);
-      setError(result.error || 'Verifique os campos.');
+      // Só mostra banner quando não há erros por campo (ex: 429)
+      setError(null);
     } else {
       setError(result.error || 'Erro ao fazer login.');
     }

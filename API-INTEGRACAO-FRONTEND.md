@@ -11,19 +11,35 @@ Este documento descreve de forma completa a API para permitir uma integração c
 | **Base URL** | `{dominio}/api/v1` |
 | **Exemplo** | `https://api.exemplo.com/api/v1` ou `http://localhost:8000/api/v1` |
 | **Content-Type** | `application/json` |
-| **Autenticação** | Bearer Token (Laravel Sanctum) |
+| **Autenticação** | Cookie httpOnly + Secure (Laravel Sanctum) |
 
 ---
 
 ## 2. Autenticação
 
-### 2.1. Como autenticar
+### 2.1. Como autenticar (Cookie httpOnly + Secure)
 
-Após o login, o servidor retorna um **token**. Esse token deve ser enviado em **todas** as requisições protegidas no header:
+O token é armazenado num **cookie** com flags `HttpOnly` e `Secure`:
 
+- **HttpOnly** — JavaScript não consegue ler o cookie (proteção XSS)
+- **Secure** — Cookie enviado apenas via HTTPS (em produção)
+
+**Fluxo:**
+
+1. **Login** → A API define o cookie na resposta. O browser armazena-o automaticamente.
+2. **Requisições seguintes** → O browser envia o cookie em todas as chamadas ao domínio da API.
+
+**Obrigatório no frontend:** usar `credentials: 'include'` (fetch) ou `withCredentials: true` (Axios):
+
+```javascript
+// Fetch
+fetch('https://api.exemplo.com/api/v1/me', { credentials: 'include' });
+
+// Axios
+axios.get('/api/v1/me', { withCredentials: true });
 ```
-Authorization: Bearer {token}
-```
+
+**Alternativa:** Se o cliente enviar o token no header `Authorization: Bearer {token}`, também funciona (útil para apps nativos ou testes).
 
 ### 2.2. Rotas públicas vs protegidas
 
@@ -38,6 +54,7 @@ Authorization: Bearer {token}
 | 403 | Sem permissão (ex: não-admin) | `"Não autorizado."` |
 | 404 | Recurso não encontrado | `"Recurso não encontrado."` |
 | 422 | Erros de validação | Objeto com `message` e `errors` |
+| 429 | Rate limit excedido | `"Muitas tentativas. Aguarde antes de tentar novamente."` |
 
 ---
 
@@ -47,7 +64,7 @@ Authorization: Bearer {token}
 
 #### POST `/login`
 
-Autentica o utilizador e retorna o token.
+Autentica o utilizador e define o cookie de autenticação na resposta.
 
 **Rate limit:** 3 tentativas por minuto.
 
@@ -59,13 +76,13 @@ Autentica o utilizador e retorna o token.
 }
 ```
 
-**Response 200:**
+**Response 200:** O token é enviado no **cookie** `feerie_token` (httpOnly, Secure). O corpo da resposta:
+
 ```json
 {
   "message": "Login realizado com sucesso",
-  "token": "1|xxxxxxxxxxxxx",
   "token_type": "Bearer",
-  "expires_in": 43200,
+  "expires_in": 2592000,
   "user": {
     "id": "ulid",
     "name": "Nome",
@@ -75,20 +92,61 @@ Autentica o utilizador e retorna o token.
 }
 ```
 
-**Response 401:**
+**Importante:** O token não vem no JSON. O frontend deve confiar no cookie e usar `credentials: 'include'` nas requisições.
+
+**Response 401** — Mensagens específicas conforme o erro. O frontend deve mostrar `message` em destaque e pode usar `errors` para exibir junto aos campos:
+
+- Email não encontrado ou inválido:
 ```json
 {
-  "message": "Credenciais inválidas"
+  "message": "Email não encontrado ou inválido.",
+  "errors": {
+    "email": ["Email não encontrado ou inválido."]
+  }
 }
 ```
+
+- Password incorreta (email existe):
+```json
+{
+  "message": "Password incorreta.",
+  "errors": {
+    "password": ["Password incorreta."]
+  }
+}
+```
+
+**Response 422** (validação — campos vazios ou formato inválido):
+```json
+{
+  "message": "O email é obrigatório.",
+  "errors": {
+    "email": ["O email é obrigatório."],
+    "password": ["A password é obrigatória."]
+  }
+}
+```
+
+**Como exibir no frontend:**
+- `response.data.message` → mensagem geral (toast, banner)
+- `response.data.errors.email[0]` → erro no campo email
+- `response.data.errors.password[0]` → erro no campo password
+
+**Response 429 (rate limit — 3 tentativas/minuto):**
+```json
+{
+  "message": "Muitas tentativas. Aguarde antes de tentar novamente."
+}
+```
+O header `Retry-After` indica os segundos até poder tentar de novo. O frontend pode exibir um contador ou desativar o botão até o tempo indicado.
 
 ---
 
 #### POST `/logout` 🔒
 
-Encerra a sessão atual (invalida o token).
+Encerra a sessão atual (invalida o token e remove o cookie).
 
-**Headers:** `Authorization: Bearer {token}`
+**Autenticação:** Cookie enviado automaticamente ou header `Authorization: Bearer {token}`
 
 **Response 200:**
 ```json
@@ -103,7 +161,7 @@ Encerra a sessão atual (invalida o token).
 
 Retorna os dados do utilizador autenticado.
 
-**Headers:** `Authorization: Bearer {token}`
+**Autenticação:** Cookie enviado automaticamente ou header `Authorization: Bearer {token}`
 
 **Response 200:**
 ```json
@@ -538,18 +596,19 @@ Todos os IDs principais (Order, Product, User, Customer, Payment) usam **ULID** 
 
 ## 7. Fluxo recomendado no frontend
 
-1. **Login** → Guardar `token` e `user` (ex: localStorage, cookie ou estado global).
-2. **Requisições protegidas** → Enviar `Authorization: Bearer {token}` em todas.
-3. **401** → Limpar token e redirecionar para login.
-4. **403** → Mostrar mensagem de falta de permissão.
-5. **Criar order** → Usar `order` e `payment` para integrar com AppyPay/Ekwanza (URLs de checkout fornecidas pelos gateways).
-6. **Produtos com ficheiro** → Para download, usar endpoint com token e tratar resposta como blob/ficheiro.
+1. **Login** → Usar `credentials: 'include'`. O cookie é definido pelo servidor e guardado automaticamente pelo browser.
+2. **Guardar `user`** → Armazenar os dados do utilizador em estado (ex: React Context, Zustand, Pinia) para uso na UI.
+3. **Requisições protegidas** → Usar `credentials: 'include'` ou `withCredentials: true`. O cookie é enviado automaticamente.
+4. **401** → Redirecionar para login (o cookie foi invalidado ou expirou).
+5. **403** → Mostrar mensagem de falta de permissão.
+6. **Criar order** → Usar `order` e `payment` para integrar com AppyPay/Ekwanza (URLs de checkout fornecidas pelos gateways).
+7. **Produtos com ficheiro** → Para download, usar endpoint com credenciais e tratar resposta como blob/ficheiro.
 
 ---
 
-## 8. CORS e Sanctum
+## 8. CORS e cookies
 
-Para SPAs no mesmo domínio ou em subdomínios configurados, o Sanctum permite autenticação por cookies. Para domínios diferentes (ex: frontend em `app.exemplo.com` e API em `api.exemplo.com`), utilize **Bearer Token** no header e configure CORS no backend para permitir a origem do frontend.
+A API tem `supports_credentials: true` ativado. O frontend deve estar em `allowed_origins` do `config/cors.php`. O domínio do cookie pode ser configurado em `AUTH_COOKIE_DOMAIN` (ex: `.exemplo.com` para partilhar entre `app.exemplo.com` e `api.exemplo.com`).
 
 ---
 

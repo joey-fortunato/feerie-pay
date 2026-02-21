@@ -91,10 +91,16 @@ export async function apiRequest<T>(
     ...rest,
   });
 
-  // 401: token inválido ou expirado
-  if (response.status === 401 && !skipAuthRedirect && onUnauthorized) {
-    onUnauthorized();
-    throw new ApiError('Não autenticado.', 401);
+  // 401: token inválido ou credenciais incorretas (login)
+  if (response.status === 401) {
+    const data = await response.json().catch(() => ({}));
+    const payload = data as { message?: string; errors?: Record<string, string[]> };
+    const message = payload.message || 'Não autenticado.';
+    // Só acionar logout em rotas que exigiam auth (não no login)
+    if (!skipAuthRedirect && onUnauthorized && options.requiresAuth !== false) {
+      onUnauthorized();
+    }
+    throw new ApiError(message, 401, undefined, payload.errors);
   }
 
   // 403: sem permissão
