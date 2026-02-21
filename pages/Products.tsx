@@ -1,125 +1,117 @@
-
-import React, { useState } from 'react';
-import { Search, Plus, Package, DollarSign, Filter, Edit3, Trash2, BookOpen, MonitorPlay, Users, X, Upload, Check, Image as ImageIcon, Link, Copy, CheckCircle, ArrowLeft } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Search, Plus, Package, DollarSign, Filter, Edit3, Trash2, BookOpen, MonitorPlay, Users, X, Upload, Check, Image as ImageIcon, Link, Copy, CheckCircle, Loader2, AlertCircle } from 'lucide-react';
 import { Product } from '../types';
 import { ProductEditor } from './ProductEditor';
-
-// Mock Data Updated with Books
-const initialProducts: Product[] = [
-  { 
-    id: 'PRD-001', 
-    name: 'E-book: Dominando o E-kwanza', 
-    price: 8000, 
-    image: 'https://placehold.co/400x600/6363F1/FFFFFF?text=E-book+Kwanza', 
-    type: 'unique', 
-    category: 'book',
-    sales: 342, 
-    createdAt: '12 Out, 2023',
-    status: 'active'
-  },
-  { 
-    id: 'PRD-002', 
-    name: 'Livro: Empreendedorismo em Angola', 
-    price: 15000, 
-    image: 'https://placehold.co/400x600/29363D/FFFFFF?text=Livro+Fisico', 
-    type: 'unique', 
-    category: 'book',
-    sales: 89, 
-    createdAt: '10 Out, 2023',
-    status: 'active'
-  },
-  { 
-    id: 'PRD-003', 
-    name: 'Curso: Marketing Digital 360', 
-    price: 25000, 
-    image: 'https://placehold.co/600x400/e2e8f0/64748B?text=Curso+Online', 
-    type: 'unique', 
-    category: 'course',
-    sales: 124, 
-    createdAt: '15 Set, 2023',
-    status: 'active'
-  },
-  { 
-    id: 'PRD-004', 
-    name: 'Mentoria Individual (1h)', 
-    price: 50000, 
-    image: 'https://placehold.co/400x400/orange/white?text=Mentoria', 
-    type: 'unique', 
-    category: 'service',
-    sales: 12, 
-    createdAt: '15 Set, 2023',
-    status: 'active'
-  },
-  { 
-    id: 'PRD-005', 
-    name: 'Comunidade VIP (Assinatura)', 
-    price: 5000, 
-    image: 'https://placehold.co/400x400/10b981/white?text=VIP', 
-    type: 'subscription', 
-    category: 'service',
-    sales: 450, 
-    createdAt: '01 Ago, 2023',
-    status: 'draft'
-  },
-];
+import { productsApi } from '../services/productsApi';
+import { apiProductToProduct, API_TYPE_FROM_CATEGORY } from '../lib/productMapper';
+import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
+import { ConfirmModal } from '../components/ConfirmModal';
+import { ApiError } from '../services/api';
 
 export const Products: React.FC = () => {
-  // View State: 'list' or 'editing'
+  const { isAdmin } = useAuth();
+  const toast = useToast();
   const [viewMode, setViewMode] = useState<'list' | 'editing'>('list');
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
   const [searchTerm, setSearchTerm] = useState('');
-  const [products, setProducts] = useState<Product[]>(initialProducts);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // Form State for "Quick Create" modal
   const [formData, setFormData] = useState<{
     name: string;
     price: string;
-    category: 'book' | 'course' | 'service';
+    category: 'book' | 'course' | 'service' | 'digital';
     status: 'active' | 'draft';
+    external_link: string;
+    instructions: string;
+    file: File | null;
   }>({
     name: '',
     price: '',
     category: 'book',
-    status: 'active'
+    status: 'active',
+    external_link: '',
+    instructions: '',
+    file: null,
   });
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
 
-  // Filter Logic
-  const filteredProducts = products.filter(product => 
-    product.name.toLowerCase().includes(searchTerm.toLowerCase())
+  const [confirmDelete, setConfirmDelete] = useState<{ product: Product } | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const fetchProducts = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const res = await productsApi.list(1);
+      setProducts(res.data.map(apiProductToProduct));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Erro ao carregar produtos.');
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchProducts();
+  }, [fetchProducts]);
+
+  const filteredProducts = products.filter((p) =>
+    p.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  // Stats Calculations
   const totalProducts = products.length;
-  const totalRevenue = products.reduce((acc, curr) => acc + (curr.price * curr.sales), 0);
+  const totalRevenue = products.reduce((acc, curr) => acc + curr.price * curr.sales, 0);
   const totalSalesCount = products.reduce((acc, curr) => acc + curr.sales, 0);
   const averageTicket = totalSalesCount > 0 ? totalRevenue / totalSalesCount : 0;
 
-  const handleQuickSaveProduct = () => {
+  const handleQuickSaveProduct = async () => {
     if (!formData.name || !formData.price) return;
+    setFormError(null);
+    setIsCreating(true);
+    try {
+      const fd = new FormData();
+      fd.append('name', formData.name);
+      fd.append('price', formData.price);
+      fd.append('type', API_TYPE_FROM_CATEGORY[formData.category]);
 
-    const newProduct: Product = {
-      id: `PRD-${Math.floor(Math.random() * 10000)}`,
-      name: formData.name,
-      price: parseFloat(formData.price),
-      image: formData.category === 'book' 
-        ? 'https://placehold.co/400x600/6363F1/FFFFFF?text=Novo+Livro' 
-        : 'https://placehold.co/600x400/e2e8f0/64748B?text=Novo+Produto',
-      type: 'unique',
-      category: formData.category,
-      sales: 0,
-      createdAt: new Date().toLocaleDateString('pt-AO', { day: '2-digit', month: 'short', year: 'numeric' }),
-      status: formData.status,
-    };
+      if (formData.category === 'book' || formData.category === 'digital') {
+        if (!formData.file) {
+          setFormError('O ficheiro é obrigatório para e-book ou arquivo digital.');
+          setIsCreating(false);
+          return;
+        }
+        fd.append('file', formData.file);
+      } else if (formData.category === 'course') {
+        fd.append('external_link', formData.external_link || '');
+      } else if (formData.category === 'service') {
+        fd.append('instructions', formData.instructions || '');
+      }
 
-    setProducts([newProduct, ...products]);
-    setIsModalOpen(false);
-    setFormData({ name: '', price: '', category: 'book', status: 'active' }); // Reset form
-    
-    // Optional: Automatically switch to edit mode for the new product
-    handleEditClick(newProduct);
+      await productsApi.create(fd);
+      setIsModalOpen(false);
+      setFormData({
+        name: '',
+        price: '',
+        category: 'book',
+        status: 'active',
+        external_link: '',
+        instructions: '',
+        file: null,
+      });
+      await fetchProducts();
+      toast.success('Produto criado com sucesso.');
+    } catch (err) {
+      setFormError(err instanceof ApiError ? err.message : 'Erro ao criar produto.');
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   const handleEditClick = (product: Product) => {
@@ -128,61 +120,89 @@ export const Products: React.FC = () => {
   };
 
   const handleSaveEditedProduct = (updatedProduct: Product) => {
-    // Update the product in the main list
-    const updatedList = products.map(p => p.id === updatedProduct.id ? updatedProduct : p);
+    const updatedList = products.map((p) => (p.id === updatedProduct.id ? updatedProduct : p));
     setProducts(updatedList);
     setViewMode('list');
     setEditingProduct(null);
+  };
+
+  const handleDeleteClick = (product: Product) => setConfirmDelete({ product });
+
+  const handleDeleteConfirm = async () => {
+    if (!confirmDelete) return;
+    setIsDeleting(true);
+    try {
+      await productsApi.delete(confirmDelete.product.id);
+      setProducts((prev) => prev.filter((p) => p.id !== confirmDelete.product.id));
+      setConfirmDelete(null);
+      toast.success('Produto apagado com sucesso.');
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Erro ao apagar.');
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   const handleCopyLink = (id: string) => {
     const mockUrl = `https://feerie.pay/checkout/${id.toLowerCase()}`;
     navigator.clipboard.writeText(mockUrl);
     setCopiedId(id);
+    toast.success('Link copiado para a área de transferência.');
     setTimeout(() => setCopiedId(null), 2000);
   };
 
   const getCategoryIcon = (category: string) => {
-    switch(category) {
-      case 'book': return <BookOpen size={14} className="text-blue-500" />;
-      case 'course': return <MonitorPlay size={14} className="text-purple-500" />;
-      case 'service': return <Users size={14} className="text-orange-500" />;
-      default: return <Package size={14} className="text-gray-500" />;
+    switch (category) {
+      case 'book':
+        return <BookOpen size={14} className="text-blue-500" />;
+      case 'course':
+        return <MonitorPlay size={14} className="text-purple-500" />;
+      case 'service':
+        return <Users size={14} className="text-orange-500" />;
+      case 'digital':
+        return <Package size={14} className="text-teal-500" />;
+      default:
+        return <Package size={14} className="text-gray-500" />;
     }
   };
 
   const getCategoryLabel = (category: string) => {
-     switch(category) {
-      case 'book': return 'Livro / E-book';
-      case 'course': return 'Curso Online';
-      case 'service': return 'Serviço / Mentoria';
-      default: return 'Outro';
+    switch (category) {
+      case 'book':
+        return 'Livro / E-book';
+      case 'course':
+        return 'Curso Online';
+      case 'service':
+        return 'Serviço / Mentoria';
+      case 'digital':
+        return 'Arquivo Digital';
+      default:
+        return 'Outro';
     }
   };
 
-  const getImageRecommendation = (category: string) => {
-    switch(category) {
-      case 'book': 
-        return { label: 'Vertical (Capa de Livro)', size: '1000 x 1500 px', aspect: 'aspect-[2/3]' };
-      case 'course': 
-        return { label: 'Horizontal (Thumbnail)', size: '1280 x 720 px', aspect: 'aspect-video' };
-      case 'service': 
-        return { label: 'Quadrado (Instagram)', size: '1080 x 1080 px', aspect: 'aspect-square' };
-      default: 
-        return { label: 'Automático', size: 'Qualquer tamanho', aspect: 'aspect-square' };
-    }
-  };
+  const handleSaveToApi = useCallback(
+    (productId: string) => async (formData: FormData) => {
+      try {
+        await productsApi.update(productId, formData);
+        await fetchProducts();
+        toast.success('Produto atualizado com sucesso.');
+      } catch (err) {
+        toast.error(err instanceof ApiError ? err.message : 'Erro ao atualizar.');
+        throw err;
+      }
+    },
+    [toast, fetchProducts]
+  );
 
-  const recommendation = getImageRecommendation(formData.category);
-
-  // --- RENDER EDITOR MODE ---
   if (viewMode === 'editing' && editingProduct) {
     return (
       <div className="p-6 lg:p-10 max-w-7xl mx-auto relative">
-        <ProductEditor 
-          product={editingProduct} 
-          onBack={() => setViewMode('list')} 
+        <ProductEditor
+          product={editingProduct}
+          onBack={() => { setViewMode('list'); setEditingProduct(null); }}
           onSave={handleSaveEditedProduct}
+          onSaveToApi={isAdmin ? handleSaveToApi(editingProduct.id) : undefined}
         />
       </div>
     );
@@ -247,19 +267,42 @@ export const Products: React.FC = () => {
             <Filter size={18} />
             <span>Filtrar</span>
           </button>
-          <button 
-            onClick={() => setIsModalOpen(true)}
-            className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-2.5 bg-brand-primary text-white rounded-xl text-sm font-bold hover:bg-brand-hover shadow-lg shadow-indigo-500/20 transition-all transform hover:-translate-y-0.5"
-          >
-            <Plus size={18} />
-            <span>Novo Produto</span>
-          </button>
+          {isAdmin && (
+            <button
+              onClick={() => {
+                setFormError(null);
+                setIsModalOpen(true);
+              }}
+              className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-2.5 bg-brand-primary text-white rounded-xl text-sm font-bold hover:bg-brand-hover shadow-lg shadow-indigo-500/20 transition-all transform hover:-translate-y-0.5"
+            >
+              <Plus size={18} />
+              <span>Novo Produto</span>
+            </button>
+          )}
         </div>
       </div>
 
+      {error && (
+        <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-100 rounded-xl text-red-700">
+          <AlertCircle size={20} />
+          <span>{error}</span>
+          <button
+            onClick={() => fetchProducts()}
+            className="ml-auto text-sm font-semibold hover:underline"
+          >
+            Tentar novamente
+          </button>
+        </div>
+      )}
+
       {/* Products Table */}
       <div className="bg-white rounded-2xl shadow-soft border border-gray-100 overflow-hidden">
-        {filteredProducts.length > 0 ? (
+        {isLoading ? (
+          <div className="py-20 flex flex-col items-center justify-center text-gray-500">
+            <Loader2 size={32} className="animate-spin mb-4" />
+            <p>A carregar produtos...</p>
+          </div>
+        ) : filteredProducts.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-gray-50/50 border-b border-gray-100">
@@ -326,16 +369,22 @@ export const Products: React.FC = () => {
                         >
                           {copiedId === product.id ? <CheckCircle size={16} /> : <Link size={16} />}
                         </button>
-                        <button 
+                        <button
                           onClick={() => handleEditClick(product)}
-                          className="p-2 text-gray-400 hover:text-brand-primary hover:bg-indigo-50 rounded-lg transition-colors" 
+                          className="p-2 text-gray-400 hover:text-brand-primary hover:bg-indigo-50 rounded-lg transition-colors"
                           title="Editar"
                         >
                           <Edit3 size={16} />
                         </button>
-                         <button className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Excluir">
-                          <Trash2 size={16} />
-                        </button>
+                        {isAdmin && (
+                          <button
+                            onClick={() => handleDeleteClick(product)}
+                            className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                            title="Excluir"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -346,18 +395,33 @@ export const Products: React.FC = () => {
         ) : (
           <div className="py-16 flex flex-col items-center justify-center text-center">
             <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
-               <Search size={24} className="text-gray-400" />
+              <Package size={24} className="text-gray-400" />
             </div>
-            <h3 className="text-lg font-medium text-dark-text">Nenhum produto encontrado</h3>
+            <h3 className="text-lg font-medium text-dark-text">
+              {searchTerm ? 'Nenhum produto encontrado' : 'Ainda não há produtos'}
+            </h3>
             <p className="text-gray-500 text-sm mt-1 max-w-xs">
-              Não encontramos nenhum produto com o termo "{searchTerm}". Tente limpar o filtro ou criar um novo.
+              {searchTerm
+                ? `Não encontramos nenhum produto com "${searchTerm}".`
+                : 'Crie o seu primeiro produto para começar a vender.'}
             </p>
-            <button 
-              onClick={() => setSearchTerm('')}
-              className="mt-6 text-brand-primary font-semibold text-sm hover:underline"
-            >
-              Limpar pesquisa
-            </button>
+            {searchTerm ? (
+              <button
+                onClick={() => setSearchTerm('')}
+                className="mt-6 text-brand-primary font-semibold text-sm hover:underline"
+              >
+                Limpar pesquisa
+              </button>
+            ) : (
+              isAdmin && (
+                <button
+                  onClick={() => setIsModalOpen(true)}
+                  className="mt-6 px-4 py-2 bg-brand-primary text-white font-semibold text-sm rounded-xl hover:bg-brand-hover"
+                >
+                  Criar Produto
+                </button>
+              )
+            )}
           </div>
         )}
       </div>
@@ -378,13 +442,19 @@ export const Products: React.FC = () => {
             </div>
 
             <div className="p-6 space-y-5 overflow-y-auto custom-scrollbar">
+              {formError && (
+                <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-100 rounded-xl text-red-700 text-sm">
+                  <AlertCircle size={18} />
+                  {formError}
+                </div>
+              )}
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Nome do Produto</label>
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   placeholder="Ex: E-book Como Investir na Bolsa"
                   value={formData.name}
-                  onChange={(e) => setFormData({...formData, name: e.target.value})}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                   className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all"
                 />
               </div>
@@ -417,75 +487,152 @@ export const Products: React.FC = () => {
               </div>
 
               <div className="space-y-2">
-                 <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Tipo de Produto</label>
-                 <div className="grid grid-cols-3 gap-3">
-                    {[
-                      { id: 'book', label: 'Livro / Ebook', icon: BookOpen },
-                      { id: 'course', label: 'Curso Online', icon: MonitorPlay },
-                      { id: 'service', label: 'Mentoria', icon: Users },
-                    ].map((cat) => (
-                      <button
-                        key={cat.id}
-                        onClick={() => setFormData({...formData, category: cat.id as any})}
-                        className={`flex flex-col items-center justify-center gap-2 p-3 rounded-xl border-2 transition-all ${
-                          formData.category === cat.id 
-                            ? 'border-brand-primary bg-indigo-50 text-brand-primary' 
-                            : 'border-gray-100 text-gray-500 hover:border-gray-300 hover:bg-gray-50'
-                        }`}
-                      >
-                        <cat.icon size={20} />
-                        <span className="text-xs font-medium">{cat.label}</span>
-                      </button>
-                    ))}
-                 </div>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Tipo de Produto</label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {[
+                    { id: 'book' as const, label: 'E-book', icon: BookOpen },
+                    { id: 'course' as const, label: 'Curso', icon: MonitorPlay },
+                    { id: 'digital' as const, label: 'Arquivo', icon: Package },
+                    { id: 'service' as const, label: 'Serviço', icon: Users },
+                  ].map((cat) => (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() =>
+                        setFormData({ ...formData, category: cat.id, file: null })
+                      }
+                      className={`flex flex-col items-center justify-center gap-2 p-3 rounded-xl border-2 transition-all ${
+                        formData.category === cat.id
+                          ? 'border-brand-primary bg-indigo-50 text-brand-primary'
+                          : 'border-gray-100 text-gray-500 hover:border-gray-300 hover:bg-gray-50'
+                      }`}
+                    >
+                      <cat.icon size={20} />
+                      <span className="text-xs font-medium">{cat.label}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              <div className="space-y-2">
-                 <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Capa do Produto</label>
-                 <div className="border-2 border-dashed border-gray-200 rounded-xl p-6 flex flex-col items-center justify-center text-center cursor-pointer hover:bg-gray-50 transition-colors group relative overflow-hidden">
-                     <div className="relative z-10 flex flex-col items-center">
-                       <div className="w-12 h-12 bg-indigo-50 text-brand-primary rounded-full flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-                          <Upload size={20} />
-                       </div>
-                       <p className="text-sm font-bold text-dark-text mb-1">Clique para fazer upload</p>
-                       <p className="text-xs text-gray-400 mb-3">PNG, JPG ou GIF (Máx. 5MB)</p>
-                       <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-gray-100 rounded-md border border-gray-200 animate-fade-in">
-                          <div className="flex items-center gap-1.5">
-                             <ImageIcon size={12} className="text-gray-500" />
-                             <span className="text-[10px] font-bold text-gray-600 uppercase tracking-wide">
-                                {recommendation.label}
-                             </span>
-                          </div>
-                          <span className="text-[10px] text-gray-300">|</span>
-                          <span className="text-[10px] font-medium text-brand-primary">
-                             {recommendation.size}
-                          </span>
-                       </div>
-                     </div>
-                 </div>
-              </div>
+              {(formData.category === 'book' || formData.category === 'digital') && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    Ficheiro do produto *
+                  </label>
+                  <label className="block border-2 border-dashed border-gray-200 rounded-xl p-6 cursor-pointer hover:bg-gray-50 transition-colors text-center">
+                    <input
+                      type="file"
+                      className="hidden"
+                      accept=".pdf,.epub,.zip"
+                      onChange={(e) =>
+                        setFormData({ ...formData, file: e.target.files?.[0] ?? null })
+                      }
+                    />
+                    {formData.file ? (
+                      <p className="text-sm font-medium text-brand-primary">{formData.file.name}</p>
+                    ) : (
+                      <>
+                        <Upload size={24} className="mx-auto text-gray-400 mb-2" />
+                        <p className="text-sm text-gray-600">PDF, EPUB, ZIP (Máx. 10MB)</p>
+                      </>
+                    )}
+                  </label>
+                </div>
+              )}
+
+              {formData.category === 'course' && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    Link do curso *
+                  </label>
+                  <input
+                    type="url"
+                    placeholder="https://..."
+                    value={formData.external_link}
+                    onChange={(e) =>
+                      setFormData({ ...formData, external_link: e.target.value })
+                    }
+                    className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none"
+                  />
+                </div>
+              )}
+
+              {formData.category === 'service' && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    Instruções de entrega *
+                  </label>
+                  <textarea
+                    rows={3}
+                    placeholder="Ex: Entra em contacto após a compra para agendar a sessão..."
+                    value={formData.instructions}
+                    onChange={(e) =>
+                      setFormData({ ...formData, instructions: e.target.value })
+                    }
+                    className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none resize-none"
+                  />
+                </div>
+              )}
             </div>
 
             <div className="px-6 py-4 bg-gray-50 rounded-b-2xl flex justify-end gap-3 flex-shrink-0">
-               <button 
-                onClick={() => setIsModalOpen(false)}
+              <button
+                onClick={() => {
+                  setIsModalOpen(false);
+                  setFormError(null);
+                }}
                 className="px-5 py-2.5 text-sm font-semibold text-gray-600 hover:bg-gray-200 rounded-xl transition-colors"
-               >
-                 Cancelar
-               </button>
-               <button 
+              >
+                Cancelar
+              </button>
+              <button
                 onClick={handleQuickSaveProduct}
-                disabled={!formData.name || !formData.price}
+                disabled={
+                  isCreating ||
+                  !formData.name ||
+                  !formData.price ||
+                  (formData.category === 'book' || formData.category === 'digital'
+                    ? !formData.file
+                    : formData.category === 'course'
+                      ? !formData.external_link.trim()
+                      : formData.category === 'service'
+                        ? !formData.instructions.trim()
+                        : false)
+                }
                 className="px-5 py-2.5 text-sm font-bold text-white bg-brand-primary hover:bg-brand-hover rounded-xl shadow-md shadow-indigo-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2"
-               >
-                 <Check size={16} />
-                 Criar e Editar
-               </button>
+              >
+                {isCreating ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    A criar...
+                  </>
+                ) : (
+                  <>
+                    <Check size={16} />
+                    Criar Produto
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>
       )}
 
+      <ConfirmModal
+        isOpen={!!confirmDelete}
+        title="Apagar produto"
+        message={
+          confirmDelete
+            ? `Tem a certeza que deseja apagar "${confirmDelete.product.name}"? Esta ação não pode ser desfeita.`
+            : ''
+        }
+        confirmLabel="Apagar"
+        cancelLabel="Cancelar"
+        variant="danger"
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setConfirmDelete(null)}
+        isLoading={isDeleting}
+      />
     </div>
   );
 };

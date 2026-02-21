@@ -12,8 +12,10 @@ export const productsApi = {
   create: (formData: FormData) =>
     api.post<ApiProduct>('/products', formData),
 
-  update: (id: string, formData: FormData) =>
-    api.patch<ApiProduct>(`/products/${id}`, formData),
+  update: (id: string, formData: FormData) => {
+    formData.append('_method', 'PATCH');
+    return api.post<ApiProduct>(`/products/${id}`, formData);
+  },
 
   delete: (id: string) =>
     api.delete<void>(`/products/${id}`),

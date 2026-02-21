@@ -22,10 +22,14 @@ export interface Product {
   price: number;
   image: string;
   type: 'unique' | 'subscription';
-  category: 'book' | 'course' | 'service' | 'digital'; 
+  category: 'book' | 'course' | 'service' | 'digital';
   sales: number;
-  createdAt: string; 
+  createdAt: string;
   status: 'active' | 'draft';
+  description?: string;
+  external_link?: string | null;
+  instructions?: string | null;
+  file_path?: string | null;
 }
 
 export interface PaymentLink {

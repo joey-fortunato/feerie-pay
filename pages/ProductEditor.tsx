@@ -7,19 +7,30 @@ interface ProductEditorProps {
   product: Product;
   onBack: () => void;
   onSave: (updatedProduct: Product) => void;
+  /** Chamada à API para persistir alterações (opcional) */
+  onSaveToApi?: (formData: FormData) => Promise<void>;
 }
 
 type EditorTab = 'general' | 'checkout' | 'order_bump' | 'thank_you';
 
-export const ProductEditor: React.FC<ProductEditorProps> = ({ product, onBack, onSave }) => {
+const API_TYPE_MAP: Record<string, 'ebook' | 'course' | 'file' | 'service'> = {
+  book: 'ebook',
+  course: 'course',
+  digital: 'file',
+  service: 'service',
+};
+
+export const ProductEditor: React.FC<ProductEditorProps> = ({ product, onBack, onSave, onSaveToApi }) => {
   const [activeTab, setActiveTab] = useState<EditorTab>('general');
   const [isLoading, setIsLoading] = useState(false);
-  
-  // Local state for form management
+  const [file, setFile] = useState<File | null>(null);
+
   const [formData, setFormData] = useState({
     ...product,
     category: product.category || 'book',
     description: product.description || 'Aprenda as melhores estratégias para dominar o mercado.',
+    external_link: product.external_link || '',
+    instructions: product.instructions || '',
     pricingType: product.type === 'subscription' ? 'subscription' : 'one_time',
     checkoutConfig: {
       askPhone: true,
@@ -43,12 +54,25 @@ export const ProductEditor: React.FC<ProductEditorProps> = ({ product, onBack, o
     }
   });
 
-  const handleSave = () => {
+  const handleSave = async () => {
     setIsLoading(true);
-    setTimeout(() => {
+    try {
+      if (onSaveToApi) {
+        const fd = new FormData();
+        fd.append('name', formData.name);
+        fd.append('price', String(formData.price));
+        fd.append('type', API_TYPE_MAP[formData.category] ?? 'ebook');
+        if (formData.category === 'course') fd.append('external_link', String(formData.external_link ?? ''));
+        if (formData.category === 'service') fd.append('instructions', String(formData.instructions ?? ''));
+        if (file) fd.append('file', file);
+        await onSaveToApi(fd);
+      }
+      onSave({ ...formData, external_link: formData.external_link, instructions: formData.instructions });
+    } catch {
+      // erro já tratado pelo caller
+    } finally {
       setIsLoading(false);
-      onSave(formData);
-    }, 1000);
+    }
   };
 
   const renderTabButton = (id: EditorTab, label: string, icon: any) => {
@@ -203,13 +227,25 @@ export const ProductEditor: React.FC<ProductEditorProps> = ({ product, onBack, o
                         </p>
                      </div>
                      
-                     <div className="border-2 border-dashed border-gray-200 rounded-xl p-8 flex flex-col items-center justify-center text-center hover:bg-gray-50 transition-colors cursor-pointer">
-                        <div className="w-14 h-14 bg-gray-100 rounded-full flex items-center justify-center mb-3 text-gray-400">
-                           <Upload size={24} />
-                        </div>
-                        <p className="text-sm font-bold text-dark-text">Clique para carregar o arquivo</p>
-                        <p className="text-xs text-gray-400 mt-1">PDF, ZIP, EPUB (Max 50MB)</p>
-                     </div>
+                     <label className="block border-2 border-dashed border-gray-200 rounded-xl p-8 cursor-pointer hover:bg-gray-50 transition-colors text-center">
+                        <input
+                          type="file"
+                          className="hidden"
+                          accept=".pdf,.epub,.zip"
+                          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                        />
+                        {file ? (
+                          <p className="text-sm font-medium text-brand-primary">{file.name}</p>
+                        ) : (
+                          <>
+                            <div className="w-14 h-14 bg-gray-100 rounded-full flex items-center justify-center mb-3 mx-auto text-gray-400">
+                              <Upload size={24} />
+                            </div>
+                            <p className="text-sm font-bold text-dark-text">Clique para carregar o arquivo</p>
+                            <p className="text-xs text-gray-400 mt-1">PDF, ZIP, EPUB (Máx. 10MB)</p>
+                          </>
+                        )}
+                     </label>
                   </div>
                )}
 
@@ -224,14 +260,28 @@ export const ProductEditor: React.FC<ProductEditorProps> = ({ product, onBack, o
                      </div>
 
                      <div className="space-y-2">
-                        <label className="text-sm font-semibold text-gray-700">Link de Acesso / Instruções</label>
+                        <label className="text-sm font-semibold text-gray-700">
+                          {formData.category === 'course' ? 'Link de Acesso' : 'Instruções de entrega'}
+                        </label>
                         <div className="relative">
-                           <LinkIcon size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                           <input 
-                              type="text" 
-                              placeholder="Ex: https://member.feerie.pay/curso-marketing"
+                          <LinkIcon size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                          {formData.category === 'course' ? (
+                            <input
+                              type="url"
+                              placeholder="https://member.feerie.pay/curso"
+                              value={formData.external_link}
+                              onChange={(e) => setFormData({ ...formData, external_link: e.target.value })}
                               className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-200 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all"
-                           />
+                            />
+                          ) : (
+                            <textarea
+                              rows={3}
+                              placeholder="Ex: Entre em contacto após a compra para agendar..."
+                              value={formData.instructions}
+                              onChange={(e) => setFormData({ ...formData, instructions: e.target.value })}
+                              className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-200 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all resize-none"
+                            />
+                          )}
                         </div>
                      </div>
                   </div>
