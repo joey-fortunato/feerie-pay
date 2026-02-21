@@ -357,6 +357,8 @@ Lista produtos com paginação.
       "price": "29.99",
       "type": "ebook",
       "file_path": "products/xxxx.pdf",
+      "cover_image_path": "products/covers/xxxx.jpg",
+      "cover_image_url": "http://localhost/storage/products/covers/xxxx.jpg",
       "external_link": null,
       "instructions": null,
       "status": null
@@ -391,9 +393,11 @@ Cria um produto. **Apenas admin.**
 | Campo | Tipo | Obrigatório | Descrição |
 |-------|------|-------------|-----------|
 | name | string (max 255) | Sim | Nome do produto |
+| description | string (max 5000) | Não | Descrição do produto |
 | price | numeric (≥ 0) | Sim | Preço |
 | type | string | Sim | `ebook`, `course`, `file` ou `service` |
 | file | file (max 10MB) | Se type=ebook ou file | Ficheiro do produto |
+| cover_image | file (max 2MB) | Não | Imagem de capa. Recomendado: 1000×1500px. Formatos: JPG, PNG |
 | external_link | url | Se type=course | URL do curso externo |
 | instructions | string | Se type=service | Instruções do serviço |
 
@@ -402,6 +406,7 @@ Cria um produto. **Apenas admin.**
 - `price`: 19.99
 - `type`: ebook
 - `file`: [ficheiro PDF]
+- `cover_image`: [imagem JPG ou PNG, máx 2MB]
 
 **Response 201:** Objeto do produto criado.
 
@@ -416,9 +421,11 @@ Atualiza um produto. **Apenas admin.**
 | Campo | Tipo | Descrição |
 |-------|------|-----------|
 | name | string (max 255) | Nome |
+| description | string (max 5000) | Descrição |
 | price | numeric (≥ 0) | Preço |
 | type | string | `ebook`, `course`, `file`, `service` |
 | file | file (max 10MB) | Novo ficheiro (substitui o anterior) |
+| cover_image | file (max 2MB) | Imagem de capa. JPG ou PNG. Recomendado: 1000×1500px |
 | external_link | url | Link externo |
 | instructions | string | Instruções |
 

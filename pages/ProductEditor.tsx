@@ -1,5 +1,4 @@
-
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ArrowLeft, Save, Layout, ShoppingCart, Zap, CheckCircle, Upload, Image as ImageIcon, Globe, Smartphone, CreditCard, ToggleLeft, Clock, MousePointerClick, Info, Eye, BookOpen, MonitorPlay, Users, Download, FileText, Link as LinkIcon } from 'lucide-react';
 import { Product } from '../types';
 
@@ -7,8 +6,8 @@ interface ProductEditorProps {
   product: Product;
   onBack: () => void;
   onSave: (updatedProduct: Product) => void;
-  /** Chamada à API para persistir alterações (opcional) */
-  onSaveToApi?: (formData: FormData) => Promise<void>;
+  /** Chamada à API para persistir alterações (opcional). Retorna o produto atualizado se disponível. */
+  onSaveToApi?: (formData: FormData) => Promise<Product | void>;
 }
 
 type EditorTab = 'general' | 'checkout' | 'order_bump' | 'thank_you';
@@ -20,10 +19,27 @@ const API_TYPE_MAP: Record<string, 'ebook' | 'course' | 'file' | 'service'> = {
   service: 'service',
 };
 
+const STATUS_OPTIONS: { value: Product['status']; label: string }[] = [
+  { value: 'active', label: 'Ativo (Visível)' },
+  { value: 'draft', label: 'Rascunho' },
+];
+
 export const ProductEditor: React.FC<ProductEditorProps> = ({ product, onBack, onSave, onSaveToApi }) => {
   const [activeTab, setActiveTab] = useState<EditorTab>('general');
   const [isLoading, setIsLoading] = useState(false);
   const [file, setFile] = useState<File | null>(null);
+  const [cover_image, setCover_image] = useState<File | null>(null);
+  const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (cover_image) {
+      const url = URL.createObjectURL(cover_image);
+      setCoverPreviewUrl(url);
+      return () => URL.revokeObjectURL(url);
+    }
+    setCoverPreviewUrl(null);
+    return undefined;
+  }, [cover_image]);
 
   const [formData, setFormData] = useState({
     ...product,
@@ -62,12 +78,19 @@ export const ProductEditor: React.FC<ProductEditorProps> = ({ product, onBack, o
         fd.append('name', formData.name);
         fd.append('price', String(formData.price));
         fd.append('type', API_TYPE_MAP[formData.category] ?? 'ebook');
+        fd.append('status', formData.status);
+        if (formData.description != null) fd.append('description', formData.description);
         if (formData.category === 'course') fd.append('external_link', String(formData.external_link ?? ''));
         if (formData.category === 'service') fd.append('instructions', String(formData.instructions ?? ''));
         if (file) fd.append('file', file);
-        await onSaveToApi(fd);
+        if (cover_image) fd.append('cover_image', cover_image);
+        const updated = await onSaveToApi(fd);
+        if (updated) {
+          onSave(updated);
+          return;
+        }
       }
-      onSave({ ...formData, external_link: formData.external_link, instructions: formData.instructions });
+      onSave({ ...formData, external_link: formData.external_link, instructions: formData.instructions, status: formData.status });
     } catch {
       // erro já tratado pelo caller
     } finally {
@@ -118,10 +141,15 @@ export const ProductEditor: React.FC<ProductEditorProps> = ({ product, onBack, o
               <h2 className="text-lg font-bold text-dark-text flex items-center gap-2 leading-tight truncate">
                 Editando: <span className="text-gray-500 font-normal truncate">{formData.name}</span>
               </h2>
-              <div className="flex items-center gap-2 text-xs text-gray-400 mt-1">
-                <span className={`w-2 h-2 rounded-full ${formData.status === 'active' ? 'bg-green-50' : 'bg-gray-300'}`} />
-                {formData.status === 'active' ? 'Oferta Ativa' : 'Rascunho'}
-              </div>
+              <select
+                value={formData.status}
+                onChange={(e) => setFormData({ ...formData, status: e.target.value as Product['status'] })}
+                className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white text-gray-600 focus:ring-2 focus:ring-brand-primary/20 outline-none"
+              >
+                {STATUS_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
             </div>
           </div>
           
@@ -235,7 +263,20 @@ export const ProductEditor: React.FC<ProductEditorProps> = ({ product, onBack, o
                           onChange={(e) => setFile(e.target.files?.[0] ?? null)}
                         />
                         {file ? (
-                          <p className="text-sm font-medium text-brand-primary">{file.name}</p>
+                          <div>
+                            <p className="text-sm font-medium text-brand-primary">{file.name}</p>
+                            <p className="text-xs text-gray-500 mt-1">Novo ficheiro — substituirá o anterior ao guardar</p>
+                          </div>
+                        ) : formData.file_path ? (
+                          <div className="flex flex-col items-center gap-2">
+                            <div className="w-14 h-14 bg-green-50 rounded-full flex items-center justify-center text-green-600">
+                              <Download size={24} />
+                            </div>
+                            <p className="text-sm font-medium text-dark-text">
+                              Ficheiro atual: {formData.file_path.split('/').pop() ?? formData.file_path}
+                            </p>
+                            <p className="text-xs text-gray-500">Clique para substituir por outro ficheiro</p>
+                          </div>
                         ) : (
                           <>
                             <div className="w-14 h-14 bg-gray-100 rounded-full flex items-center justify-center mb-3 mx-auto text-gray-400">
@@ -354,16 +395,28 @@ export const ProductEditor: React.FC<ProductEditorProps> = ({ product, onBack, o
 
                 <div className="space-y-2">
                    <label className="text-sm font-semibold text-gray-700">Imagem de Capa</label>
-                   <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 p-4 border border-gray-200 rounded-xl bg-gray-50/50 border-dashed hover:bg-gray-50 transition-colors">
-                      <img src={formData.image} alt="Cover" className="w-20 h-24 object-cover rounded-lg shadow-sm bg-white" />
-                      <div className="flex-1">
-                         <p className="text-sm font-bold text-dark-text">capa_produto.png</p>
-                         <p className="text-xs text-gray-500 mt-1">Recomendado: 1000x1500px (Max 2MB). Formatos: JPG, PNG.</p>
+                   <label className="block flex flex-col sm:flex-row items-start sm:items-center gap-4 p-4 border-2 border-dashed border-gray-200 rounded-xl bg-gray-50/50 hover:bg-gray-50 transition-colors cursor-pointer">
+                      <input
+                        type="file"
+                        className="hidden"
+                        accept=".jpg,.jpeg,.png"
+                        onChange={(e) => setCover_image(e.target.files?.[0] ?? null)}
+                      />
+                      <img
+                        src={coverPreviewUrl ?? formData.image}
+                        alt="Capa"
+                        className="w-20 h-24 object-cover rounded-lg shadow-sm bg-white shrink-0"
+                      />
+                      <div className="flex-1 min-w-0">
+                         <p className="text-sm font-bold text-dark-text">
+                           {cover_image ? cover_image.name : 'Clique para alterar a imagem'}
+                         </p>
+                         <p className="text-xs text-gray-500 mt-1">Recomendado: 1000×1500px (Máx. 2MB). JPG, PNG.</p>
                       </div>
-                      <button className="w-full sm:w-auto px-4 py-2.5 text-sm bg-white border border-gray-200 rounded-lg font-medium text-gray-600 hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm flex items-center justify-center gap-2">
+                      <span className="w-full sm:w-auto px-4 py-2.5 text-sm bg-white border border-gray-200 rounded-lg font-medium text-gray-600 hover:bg-gray-50 text-center flex items-center justify-center gap-2 shrink-0">
                         <ImageIcon size={16} /> Alterar
-                      </button>
-                   </div>
+                      </span>
+                   </label>
                 </div>
               </div>
             </div>

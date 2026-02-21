@@ -84,6 +84,8 @@ export interface ApiProduct {
   price: string;
   type: 'ebook' | 'course' | 'file' | 'service';
   file_path: string | null;
+  cover_image_path: string | null;
+  cover_image_url: string | null;
   external_link: string | null;
   instructions: string | null;
   status: string | null;

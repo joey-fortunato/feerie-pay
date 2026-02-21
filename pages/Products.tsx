@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Search, Plus, Package, DollarSign, Filter, Edit3, Trash2, BookOpen, MonitorPlay, Users, X, Upload, Check, Image as ImageIcon, Link, Copy, CheckCircle, Loader2, AlertCircle } from 'lucide-react';
+import { Search, Plus, Package, DollarSign, Edit3, Trash2, BookOpen, MonitorPlay, Users, X, Upload, Check, Image as ImageIcon, Link, Copy, CheckCircle, Loader2, AlertCircle, Download, Filter } from 'lucide-react';
 import { Product } from '../types';
 import { ProductEditor } from './ProductEditor';
 import { productsApi } from '../services/productsApi';
@@ -16,6 +16,9 @@ export const Products: React.FC = () => {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
   const [searchTerm, setSearchTerm] = useState('');
+  const [filterCategory, setFilterCategory] = useState<string>('');
+  const [filterStatus, setFilterStatus] = useState<string>('');
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -30,6 +33,7 @@ export const Products: React.FC = () => {
     external_link: string;
     instructions: string;
     file: File | null;
+    cover_image: File | null;
   }>({
     name: '',
     price: '',
@@ -38,19 +42,44 @@ export const Products: React.FC = () => {
     external_link: '',
     instructions: '',
     file: null,
+    cover_image: null,
   });
   const [formError, setFormError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(null);
 
   const [confirmDelete, setConfirmDelete] = useState<{ product: Product } | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  const [productStatuses, setProductStatuses] = useState<{ value: string; label: string }[]>([
+    { value: 'active', label: 'Ativo (Visível)' },
+    { value: 'draft', label: 'Rascunho' },
+  ]);
+
+  const STATUS_LABELS: Record<string, string> = {
+    active: 'Ativo (Visível)',
+    draft: 'Rascunho',
+    inactive: 'Inativo',
+    archived: 'Arquivado',
+  };
 
   const fetchProducts = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
       const res = await productsApi.list(1);
-      setProducts(res.data.map(apiProductToProduct));
+      const mapped = res.data.map(apiProductToProduct);
+      setProducts(mapped);
+
+      const statusesFromApi = [...new Set(res.data.map((p) => p.status).filter(Boolean))] as string[];
+      const defaultStatuses = ['active', 'draft'];
+      const allStatuses = [...new Set([...defaultStatuses, ...statusesFromApi])];
+      setProductStatuses(
+        allStatuses.map((s) => ({
+          value: s,
+          label: STATUS_LABELS[s] || s.charAt(0).toUpperCase() + s.slice(1),
+        }))
+      );
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Erro ao carregar produtos.');
     } finally {
@@ -62,9 +91,22 @@ export const Products: React.FC = () => {
     fetchProducts();
   }, [fetchProducts]);
 
-  const filteredProducts = products.filter((p) =>
-    p.name.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  useEffect(() => {
+    if (formData.cover_image) {
+      const url = URL.createObjectURL(formData.cover_image);
+      setCoverPreviewUrl(url);
+      return () => URL.revokeObjectURL(url);
+    }
+    setCoverPreviewUrl(null);
+    return undefined;
+  }, [formData.cover_image]);
+
+  const filteredProducts = products.filter((p) => {
+    const matchSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchCategory = !filterCategory || p.category === filterCategory;
+    const matchStatus = !filterStatus || p.status === filterStatus;
+    return matchSearch && matchCategory && matchStatus;
+  });
 
   const totalProducts = products.length;
   const totalRevenue = products.reduce((acc, curr) => acc + curr.price * curr.sales, 0);
@@ -80,6 +122,7 @@ export const Products: React.FC = () => {
       fd.append('name', formData.name);
       fd.append('price', formData.price);
       fd.append('type', API_TYPE_FROM_CATEGORY[formData.category]);
+      fd.append('status', formData.status);
 
       if (formData.category === 'book' || formData.category === 'digital') {
         if (!formData.file) {
@@ -93,6 +136,9 @@ export const Products: React.FC = () => {
       } else if (formData.category === 'service') {
         fd.append('instructions', formData.instructions || '');
       }
+      if (formData.cover_image) {
+        fd.append('cover_image', formData.cover_image);
+      }
 
       await productsApi.create(fd);
       setIsModalOpen(false);
@@ -104,6 +150,7 @@ export const Products: React.FC = () => {
         external_link: '',
         instructions: '',
         file: null,
+        cover_image: null,
       });
       await fetchProducts();
       toast.success('Produto criado com sucesso.');
@@ -140,6 +187,20 @@ export const Products: React.FC = () => {
       toast.error(err instanceof ApiError ? err.message : 'Erro ao apagar.');
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const [isDownloading, setIsDownloading] = useState<string | null>(null);
+  const handleDownload = async (product: Product) => {
+    if (!product.file_path || !['book', 'digital'].includes(product.category)) return;
+    setIsDownloading(product.id);
+    try {
+      await productsApi.download(product.id, product.name);
+      toast.success('Download iniciado.');
+    } catch {
+      toast.error('Erro ao fazer o download.');
+    } finally {
+      setIsDownloading(null);
     }
   };
 
@@ -182,11 +243,12 @@ export const Products: React.FC = () => {
   };
 
   const handleSaveToApi = useCallback(
-    (productId: string) => async (formData: FormData) => {
+    (productId: string) => async (formData: FormData): Promise<Product | void> => {
       try {
-        await productsApi.update(productId, formData);
+        const res = await productsApi.update(productId, formData);
         await fetchProducts();
         toast.success('Produto atualizado com sucesso.');
+        return apiProductToProduct(res);
       } catch (err) {
         toast.error(err instanceof ApiError ? err.message : 'Erro ao atualizar.');
         throw err;
@@ -262,11 +324,77 @@ export const Products: React.FC = () => {
           />
         </div>
         
-        <div className="flex w-full sm:w-auto gap-3">
-          <button className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors">
-            <Filter size={18} />
-            <span>Filtrar</span>
-          </button>
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            <button
+              onClick={() => setIsFilterOpen((v) => !v)}
+              className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors border ${
+                isFilterOpen || filterCategory || filterStatus
+                  ? 'bg-indigo-50 border-brand-primary text-brand-primary'
+                  : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+              }`}
+              title="Filtrar"
+            >
+              <Filter size={18} />
+              <span>Filtrar</span>
+              {(filterCategory || filterStatus) && (
+                <span className="w-5 h-5 rounded-full bg-brand-primary text-white text-xs flex items-center justify-center font-bold">
+                  {(filterCategory ? 1 : 0) + (filterStatus ? 1 : 0)}
+                </span>
+              )}
+            </button>
+            {isFilterOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setIsFilterOpen(false)}
+                  aria-hidden="true"
+                />
+                <div className="absolute right-0 top-full mt-2 z-50 w-72 p-4 bg-white rounded-xl shadow-lg border border-gray-100 animate-fade-in">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Filtros</p>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1.5">Categoria</label>
+                      <select
+                        value={filterCategory}
+                        onChange={(e) => setFilterCategory(e.target.value)}
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary outline-none"
+                      >
+                        <option value="">Todas</option>
+                        <option value="book">E-book</option>
+                        <option value="course">Curso</option>
+                        <option value="digital">Arquivo</option>
+                        <option value="service">Serviço</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1.5">Status</label>
+                      <select
+                        value={filterStatus}
+                        onChange={(e) => setFilterStatus(e.target.value)}
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary outline-none"
+                      >
+                        <option value="">Todos</option>
+                        <option value="active">Ativo</option>
+                        <option value="draft">Rascunho</option>
+                      </select>
+                    </div>
+                  </div>
+                  {(filterCategory || filterStatus) && (
+                    <button
+                      onClick={() => {
+                        setFilterCategory('');
+                        setFilterStatus('');
+                      }}
+                      className="mt-3 w-full py-2 text-sm font-medium text-gray-500 hover:text-brand-primary hover:bg-indigo-50 rounded-lg transition-colors"
+                    >
+                      Limpar filtros
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
           {isAdmin && (
             <button
               onClick={() => {
@@ -358,6 +486,20 @@ export const Products: React.FC = () => {
                     </td>
                     <td className="py-4 px-6 text-right">
                       <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        {(product.category === 'book' || product.category === 'digital') && product.file_path && (
+                          <button
+                            onClick={() => handleDownload(product)}
+                            disabled={isDownloading === product.id}
+                            className="p-2 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-50"
+                            title="Descarregar ficheiro"
+                          >
+                            {isDownloading === product.id ? (
+                              <Loader2 size={16} className="animate-spin" />
+                            ) : (
+                              <Download size={16} />
+                            )}
+                          </button>
+                        )}
                         <button 
                           onClick={() => handleCopyLink(product.id)}
                           className={`p-2 rounded-lg transition-all ${
@@ -398,19 +540,19 @@ export const Products: React.FC = () => {
               <Package size={24} className="text-gray-400" />
             </div>
             <h3 className="text-lg font-medium text-dark-text">
-              {searchTerm ? 'Nenhum produto encontrado' : 'Ainda não há produtos'}
+              {searchTerm || filterCategory || filterStatus ? 'Nenhum produto encontrado' : 'Ainda não há produtos'}
             </h3>
             <p className="text-gray-500 text-sm mt-1 max-w-xs">
-              {searchTerm
-                ? `Não encontramos nenhum produto com "${searchTerm}".`
+              {searchTerm || filterCategory || filterStatus
+                ? 'Nenhum produto corresponde aos filtros aplicados.'
                 : 'Crie o seu primeiro produto para começar a vender.'}
             </p>
-            {searchTerm ? (
+            {searchTerm || filterCategory || filterStatus ? (
               <button
-                onClick={() => setSearchTerm('')}
+                onClick={() => { setSearchTerm(''); setFilterCategory(''); setFilterStatus(''); }}
                 className="mt-6 text-brand-primary font-semibold text-sm hover:underline"
               >
-                Limpar pesquisa
+                Limpar filtros
               </button>
             ) : (
               isAdmin && (
@@ -434,7 +576,12 @@ export const Products: React.FC = () => {
             <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100 flex-shrink-0">
               <h3 className="text-xl font-bold text-dark-text">Criar Novo Produto</h3>
               <button 
-                onClick={() => setIsModalOpen(false)}
+                onClick={() => {
+                  setIsModalOpen(false);
+                  setFormError(null);
+                  setFormData({ name: '', price: '', category: 'book', status: 'active', external_link: '', instructions: '', file: null, cover_image: null });
+                  setCoverPreviewUrl(null);
+                }}
                 className="p-2 text-gray-400 hover:bg-gray-100 rounded-lg transition-colors"
               >
                 <X size={20} />
@@ -477,11 +624,12 @@ export const Products: React.FC = () => {
                     <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</label>
                     <select 
                       value={formData.status}
-                      onChange={(e) => setFormData({...formData, status: e.target.value as any})}
+                      onChange={(e) => setFormData({...formData, status: e.target.value as Product['status']})}
                       className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all bg-white"
                     >
-                      <option value="active">Ativo (Visível)</option>
-                      <option value="draft">Rascunho</option>
+                      {productStatuses.map((s) => (
+                        <option key={s.value} value={s.value}>{s.label}</option>
+                      ))}
                     </select>
                   </div>
               </div>
@@ -512,6 +660,47 @@ export const Products: React.FC = () => {
                     </button>
                   ))}
                 </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                  Imagem de capa
+                </label>
+                <label className="block border-2 border-dashed border-gray-200 rounded-xl p-4 cursor-pointer hover:bg-gray-50 transition-colors">
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept=".jpg,.jpeg,.png"
+                    onChange={(e) =>
+                      setFormData({ ...formData, cover_image: e.target.files?.[0] ?? null })
+                    }
+                  />
+                  <div className="flex items-center gap-4">
+                    {coverPreviewUrl ? (
+                      <>
+                        <img
+                          src={coverPreviewUrl}
+                          alt="Preview capa"
+                          className="w-16 h-20 object-cover rounded-lg shrink-0"
+                        />
+                        <div className="flex-1 text-left">
+                          <p className="text-sm font-medium text-brand-primary">{formData.cover_image.name}</p>
+                          <p className="text-xs text-gray-500">Recomendado: 1000×1500px. Máx. 2MB. JPG, PNG.</p>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="w-16 h-20 rounded-lg bg-gray-100 flex items-center justify-center shrink-0">
+                          <ImageIcon size={24} className="text-gray-400" />
+                        </div>
+                        <div className="flex-1 text-left">
+                          <p className="text-sm text-gray-600">Clique para escolher uma imagem</p>
+                          <p className="text-xs text-gray-500">Recomendado: 1000×1500px. Máx. 2MB. JPG, PNG.</p>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </label>
               </div>
 
               {(formData.category === 'book' || formData.category === 'digital') && (
@@ -580,6 +769,8 @@ export const Products: React.FC = () => {
                 onClick={() => {
                   setIsModalOpen(false);
                   setFormError(null);
+                  setFormData({ name: '', price: '', category: 'book', status: 'active', external_link: '', instructions: '', file: null, cover_image: null });
+                  setCoverPreviewUrl(null);
                 }}
                 className="px-5 py-2.5 text-sm font-semibold text-gray-600 hover:bg-gray-200 rounded-xl transition-colors"
               >

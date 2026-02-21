@@ -28,11 +28,12 @@ const PLACEHOLDER_IMAGES: Record<Product['category'], string> = {
 /** Converte ApiProduct para o formato Product usado na UI */
 export function apiProductToProduct(api: ApiProduct): Product {
   const category = CATEGORY_FROM_TYPE[api.type];
+  const image = api.cover_image_url ?? PLACEHOLDER_IMAGES[category] ?? PLACEHOLDER_IMAGES.book;
   return {
     id: api.id,
     name: api.name,
     price: parseFloat(api.price) || 0,
-    image: PLACEHOLDER_IMAGES[category] ?? PLACEHOLDER_IMAGES.book,
+    image,
     type: 'unique',
     category,
     sales: 0,
