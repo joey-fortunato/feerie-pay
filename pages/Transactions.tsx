@@ -23,8 +23,9 @@ const StatusBadge = ({ status }: { status: TransactionStatus }) => {
 };
 
 const gatewayLabel = (gateway: string) => {
-  if (gateway === 'ekwanza') return 'E-Kwanza';
-  if (gateway === 'appypay') return 'AppyPay';
+  if (gateway === 'gpo') return 'Multicaixa Express';
+  if (gateway === 'ref') return 'Referência Multicaixa';
+  if (gateway === 'ekwanza_ticket' || gateway === 'ekwanza' || gateway === 'appypay') return 'Ekwanza';
   return gateway;
 };
 
@@ -46,19 +47,29 @@ export const Transactions: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const res = (await ordersApi.list(page, 20)) as unknown as Record<string, unknown>;
-      const data = Array.isArray(res?.data) ? res.data : [];
-      const meta = (res?.meta ?? res) as Record<string, unknown> | undefined;
-      const total = Number(meta?.total ?? data.length) || 0;
-      const perPage = Number(meta?.per_page ?? 20) || 20;
-      const currentPageNum = Number(meta?.current_page ?? page) || 1;
-      const lastPage = Number(meta?.last_page) || Math.max(1, Math.ceil(total / perPage));
-      const flattened = flattenPaymentsFromOrders(data as ApiOrder[]);
+      // Buscar TODAS as páginas de pedidos e achatar todos os payments
+      const first = (await ordersApi.list(page, 20)) as unknown as Record<string, unknown>;
+      const firstData = Array.isArray(first?.data) ? (first.data as ApiOrder[]) : [];
+      const firstMeta = (first?.meta ?? first) as Record<string, unknown> | undefined;
+      const totalOrders = Number(firstMeta?.total ?? firstData.length) || 0;
+      const perPage = Number(firstMeta?.per_page ?? 20) || 20;
+      const currentPageNum = Number(firstMeta?.current_page ?? page) || 1;
+      const lastPage = Number(firstMeta?.last_page) || Math.max(1, Math.ceil(totalOrders / perPage));
+
+      const allOrders: ApiOrder[] = [...firstData];
+      for (let p = 1; p <= lastPage; p += 1) {
+        if (p === currentPageNum) continue;
+        const resPage = (await ordersApi.list(p, perPage)) as unknown as Record<string, unknown>;
+        const dataPage = Array.isArray(resPage?.data) ? (resPage.data as ApiOrder[]) : [];
+        allOrders.push(...dataPage);
+      }
+
+      const flattened = flattenPaymentsFromOrders(allOrders);
       setPayments(flattened);
       setPaginationMeta({
         current_page: currentPageNum,
         per_page: perPage,
-        total,
+        total: totalOrders,
         last_page: lastPage,
       });
     } catch (err) {
@@ -78,7 +89,7 @@ export const Transactions: React.FC = () => {
   const paidCount = payments.filter((p) => p.status === TransactionStatus.PAID).length;
 
   return (
-    <div className="p-6 lg:p-10 max-w-7xl mx-auto relative">
+    <div className="p-6 lg:p-10 max-w-7xl mx-auto relative space-y-8">
       {error && (
         <div className="mb-6 flex items-center gap-3 p-4 bg-red-50 border border-red-100 rounded-xl text-red-700">
           <AlertCircle size={20} />
@@ -94,7 +105,7 @@ export const Transactions: React.FC = () => {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         <div className="bg-white relative overflow-hidden rounded-2xl p-6 shadow-soft border border-gray-50 group hover:shadow-lg transition-all duration-300">
           <div className="absolute -right-6 -top-6 w-32 h-32 bg-emerald-400/10 rounded-full blur-2xl group-hover:bg-emerald-400/20 transition-all duration-500"></div>
           <div className="relative z-10">

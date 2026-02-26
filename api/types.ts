@@ -78,27 +78,43 @@ export interface ApiOrder {
   payments?: ApiPayment[];
 }
 
+/** gateway: gpo (MCX), ref (EMIS), ekwanza_ticket (QR E-Kwanza) — doc API 3.3 */
+export type PaymentGateway = 'gpo' | 'ref' | 'ekwanza_ticket';
+
 export interface ApiPayment {
   id: string;
-  order_id: string;
-  gateway: 'appypay' | 'ekwanza';
-  amount: string;
+  order_id: string | null;
+  gateway: PaymentGateway | string;
+  merchant_transaction_id?: string;
+  gateway_transaction_id?: string | null;
+  gateway_code?: string | null;
+  gateway_reference?: string | null;
   status: string;
+  amount: string;
+  currency?: string;
+  description?: string | null;
+  raw_response?: Record<string, unknown> | null;
+  paid_at?: string | null;
+  expires_at?: string | null;
   created_at: string;
+  updated_at?: string;
 }
 
 export interface CreateOrderRequest {
   name: string;
   email: string;
-  phone?: string;
+  phone: string;
   product_id: string;
   coupon_code?: string;
-  gateway: 'appypay' | 'ekwanza';
+  payment_method: 'gpo' | 'ref' | 'ekwanza_ticket';
+  phone_number?: string;
+  mobile_number?: string;
 }
 
 export interface CreateOrderResponse {
   order: ApiOrder;
   payment: ApiPayment;
+  gateway_response?: Record<string, unknown>;
 }
 
 export interface ApiProduct {

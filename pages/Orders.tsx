@@ -143,15 +143,21 @@ export const Orders: React.FC = () => {
       return;
     }
     setIsCreatingOrder(true);
+    const phoneFormatted = phone.startsWith('+') ? phone : `+244 ${phone.replace(/\D/g, '').slice(-9)}`;
+    const mobileNumber = phone.replace(/\D/g, '').slice(-9);
+    const payment_method = chargeGateway === 'ekwanza' ? 'ekwanza_ticket' : 'gpo';
+    const payload: Parameters<typeof ordersApi.create>[0] = {
+      name,
+      email,
+      phone: phoneFormatted,
+      product_id: selectedProduct,
+      coupon_code: enableCoupons && chargeForm.couponCode.trim() ? chargeForm.couponCode.trim() : undefined,
+      payment_method,
+    };
+    if (payment_method === 'gpo') (payload as { phone_number?: string }).phone_number = phoneFormatted;
+    if (payment_method === 'ekwanza_ticket') (payload as { mobile_number?: string }).mobile_number = mobileNumber;
     try {
-      await ordersApi.create({
-        name,
-        email,
-        phone,
-        product_id: selectedProduct,
-        coupon_code: enableCoupons && chargeForm.couponCode.trim() ? chargeForm.couponCode.trim() : undefined,
-        gateway: chargeGateway,
-      });
+      await ordersApi.create(payload);
       toast.success('Cobrança criada. O cliente receberá o link de pagamento.');
       setIsChargeModalOpen(false);
       setChargeForm({ name: '', email: '', phone: '', couponCode: '' });
@@ -175,7 +181,7 @@ export const Orders: React.FC = () => {
   const averageTicket = orders.length > 0 ? totalRevenuePage / orders.length : 0;
 
   return (
-    <div className="p-6 lg:p-10 max-w-7xl mx-auto relative">
+    <div className="p-6 lg:p-10 max-w-7xl mx-auto relative space-y-8">
       {error && (
         <div className="mb-6 flex items-center gap-3 p-4 bg-red-50 border border-red-100 rounded-xl text-red-700">
           <AlertCircle size={20} />
@@ -191,7 +197,7 @@ export const Orders: React.FC = () => {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         <div className="bg-white relative overflow-hidden rounded-2xl p-6 shadow-soft border border-gray-50 group hover:shadow-lg transition-all duration-300">
           <div className="absolute -right-6 -top-6 w-32 h-32 bg-brand-primary/10 rounded-full blur-2xl group-hover:bg-brand-primary/20 transition-all duration-500"></div>
           <div className="relative z-10">
@@ -457,7 +463,14 @@ export const Orders: React.FC = () => {
                         }`} />
                         <p className="text-xs text-gray-400 mb-0.5">{formatDateTime(p.createdAt)}</p>
                         <p className="text-sm font-medium text-dark-text">
-                          {p.gateway === 'ekwanza' ? 'E-Kwanza' : p.gateway === 'appypay' ? 'AppyPay' : p.gateway} — Kz {parseFloat(p.amount || '0').toLocaleString()}
+                          {p.gateway === 'gpo'
+                            ? 'Multicaixa Express'
+                            : p.gateway === 'ref'
+                            ? 'Referência Multicaixa'
+                            : p.gateway === 'ekwanza_ticket' || p.gateway === 'ekwanza' || p.gateway === 'appypay'
+                            ? 'Ekwanza'
+                            : p.gateway}{' '}
+                          — Kz {parseFloat(p.amount || '0').toLocaleString()}
                         </p>
                         <p className="text-xs text-gray-500">
                           {p.status === 'paid' ? 'Pago' : p.status === 'failed' ? 'Falhou' : 'Pendente'}
@@ -644,14 +657,14 @@ export const Orders: React.FC = () => {
                     onClick={() => setChargeGateway('ekwanza')}
                     className={`flex-1 py-2.5 rounded-xl border-2 text-sm font-bold transition-all ${chargeGateway === 'ekwanza' ? 'border-brand-primary bg-indigo-50 text-brand-primary' : 'border-gray-200 text-gray-500 hover:border-gray-300'}`}
                   >
-                    E-Kwanza
+                    Ekwanza
                   </button>
                   <button
                     type="button"
                     onClick={() => setChargeGateway('appypay')}
                     className={`flex-1 py-2.5 rounded-xl border-2 text-sm font-bold transition-all ${chargeGateway === 'appypay' ? 'border-brand-primary bg-indigo-50 text-brand-primary' : 'border-gray-200 text-gray-500 hover:border-gray-300'}`}
                   >
-                    AppyPay
+                    Multicaixa Express
                   </button>
                 </div>
               </div>

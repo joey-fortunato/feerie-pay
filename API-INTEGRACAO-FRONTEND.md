@@ -282,11 +282,51 @@ O sistema terá **duas páginas distintas**:
 | **Exemplo** | "Cliente X quer comprar Produto Y por 90€" | "Pagamento via AppyPay, pendente" |
 | **Dados principais** | customer, product, subtotal, desconto, total, status | order_id, gateway, amount, status |
 | **Relacionamento** | 1 pedido → N transações | 1 transação → 1 pedido |
-| **Estados** | pending, paid, failed, cancelled, refunded | pending, paid, failed |
+| **Estados** | pending, processing, paid, failed, cancelled, refunded, expired | pending, processing, paid, failed, cancelled, expired |
 
 **Resumo:**
 - **Order (Pedido)** = A compra em si (o que o cliente quer). Um pedido pode ter várias transações (ex.: tentativa 1 falhou, tentativa 2 sucedeu).
-- **Payment (Transação)** = O movimento financeiro num gateway (AppyPay/Ekwanza). Quando a transação fica `paid`, o pedido passa a `paid`.
+- **Payment (Transação)** = O movimento financeiro num gateway (GPO, REF ou E-Kwanza Ticket). Pode estar ligado a um pedido (`order_id` preenchido) ou ser **standalone** (`order_id` null) — links de pagamento com valor livre. O campo `gateway` pode ser: `gpo`, `ref`, `ekwanza_ticket`.
+
+#### Estrutura completa — `Order` (base de dados)
+
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| id | string (ULID) | ID único do pedido |
+| customer_id | string (ULID) | ID do cliente |
+| product_id | string (ULID) | ID do produto |
+| subtotal | decimal | Valor antes do desconto |
+| discount_amount | decimal | Valor do desconto aplicado |
+| total | decimal | Valor final a pagar |
+| currency | string | Moeda (ex: AOA) |
+| status | string | `pending`, `processing`, `paid`, `failed`, `cancelled`, `refunded`, `expired` |
+| paid_at | datetime\|null | Data/hora em que foi pago |
+| created_at | datetime | Data de criação |
+| updated_at | datetime | Data de atualização |
+
+**Relações carregadas em `GET /orders`:** `customer`, `product`, `payments`
+
+#### Estrutura completa — `Payment` (base de dados)
+
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| id | string (ULID) | ID único do pagamento |
+| order_id | string (ULID)\|null | ID do pedido (null se standalone) |
+| gateway | string | `gpo`, `ref` ou `ekwanza_ticket` |
+| merchant_transaction_id | string | ID único da transação (15 chars alfanuméricos) |
+| gateway_transaction_id | string\|null | ID da transação no gateway |
+| gateway_code | string\|null | Código do ticket (E-Kwanza) ou referência (REF) |
+| gateway_reference | string\|null | **REF:** entidade + referência (ex: "10111 180162314") |
+| status | string | `pending`, `processing`, `paid`, `failed`, `cancelled`, `expired` |
+| amount | decimal | Valor a cobrar |
+| currency | string | Moeda (ex: AOA) |
+| description | string\|null | Descrição opcional do pagamento |
+| payload | object\|null | Dados auxiliares |
+| raw_response | object\|null | Resposta completa do gateway |
+| paid_at | datetime\|null | Data/hora do pagamento (quando status=paid) |
+| expires_at | datetime\|null | Data limite (QR Ticket, REF) |
+| created_at | datetime | Data de criação |
+| updated_at | datetime | Data de atualização |
 
 #### Como mostrar no frontend
 
@@ -295,19 +335,19 @@ O sistema terá **duas páginas distintas**:
 | **Página Pedidos** | Status do pedido, total, cliente, produto | `order.status`, `order.total`, `order.customer` |
 | **Detalhe do pedido** | Toda a info do pedido + histórico de transações | `order` + `order.payments` |
 | **Página Transações** | Transações por gateway, valores, datas, status | `order.payments` em cada order |
-| **Checkout (após criar)** | Redirecionar para gateway usando `payment.id`, `payment.gateway` | `payment` da resposta POST /orders |
+| **Checkout (após criar)** | Exibir QR (Ticket), referência (REF) ou mensagem (GPO) usando `gateway_response` | `payment` + `gateway_response` de POST /orders ou POST /payments |
 
 **Sugestão de labels na UI:**
 - **Order** → "Pedido", "#PED-{short_id}"
 - **Payment** → "Transação", "Pagamento"
-- Status order `pending` + payment `pending` → "A aguardar pagamento"
+- Status order `pending` + payment `pending` ou `processing` → "A aguardar pagamento"
 - Status order `paid` → "Pago" (mostrar data em `order.paid_at`)
 
 ---
 
 #### POST `/orders` (público)
 
-Cria um novo pedido. **Não requer autenticação.**
+Cria um novo pedido e inicia o pagamento no gateway escolhido. **Não requer autenticação.**
 
 **Request:**
 ```json
@@ -317,7 +357,9 @@ Cria um novo pedido. **Não requer autenticação.**
   "phone": "+244 999 999 999",
   "product_id": "ulid-do-produto",
   "coupon_code": "PROMO10",
-  "gateway": "appypay"
+  "payment_method": "ekwanza_ticket",
+  "phone_number": "+244 900 123 456",
+  "mobile_number": "900123456"
 }
 ```
 
@@ -328,36 +370,128 @@ Cria um novo pedido. **Não requer autenticação.**
 | phone | string (max 50) | Sim | Telefone do cliente |
 | product_id | string (ULID) | Sim | ID do produto (deve existir) |
 | coupon_code | string | Não | Código do cupom de desconto |
-| gateway | string | Sim | Valor: `appypay` ou `ekwanza` |
+| payment_method | string | Sim | `gpo` (Multicaixa Express), `ref` (EMIS) ou `ekwanza_ticket` (QR E-Kwanza) |
+| phone_number | string (max 50) | Sim se `payment_method=gpo` | Telefone para push Multicaixa Express (formato: +244 9XX XXX XXX) |
+| mobile_number | string (max 50) | Sim se `payment_method=ekwanza_ticket` | Número para associação ao ticket E-Kwanza (apenas dígitos, ex: 900123456) |
+
+**Regras de validação:**
+- `phone_number` obrigatório quando `payment_method` = `gpo`
+- `mobile_number` obrigatório quando `payment_method` = `ekwanza_ticket`
+- `ref` não requer `phone_number` nem `mobile_number`
 
 **Response 201:**
 ```json
 {
-  "order": {
-    "id": "ulid",
-    "customer_id": "ulid",
-    "product_id": "ulid",
-    "subtotal": "100.00",
-    "discount_amount": "10.00",
-    "total": "90.00",
-    "status": "pending",
-    "created_at": "2025-02-20T10:00:00.000000Z",
-    "updated_at": "2025-02-20T10:00:00.000000Z"
-  },
+  "order": { "id": "...", "customer_id": "...", "product_id": "...", "subtotal": "100.00", "discount_amount": "10.00", "total": "90.00", "currency": "AOA", "status": "pending", "paid_at": null, "created_at": "...", "updated_at": "..." },
   "payment": {
     "id": "ulid",
     "order_id": "ulid",
-    "gateway": "appypay",
+    "gateway": "ekwanza_ticket",
+    "merchant_transaction_id": "ABC12XYZ3456789",
+    "gateway_transaction_id": null,
+    "gateway_code": null,
+    "gateway_reference": null,
+    "status": "processing",
     "amount": "90.00",
-    "status": "pending",
+    "currency": "AOA",
+    "description": null,
+    "raw_response": { "Code": "...", "QRCode": "data:image/png;base64,...", "ExpirationDate": "..." },
+    "paid_at": null,
+    "expires_at": "2025-02-20T10:15:00.000000Z",
+    "created_at": "...",
+    "updated_at": "..."
+  },
+  "gateway_response": { "Code": "...", "QRCode": "data:image/png;base64,...", "ExpirationDate": "..." }
+}
+```
+
+**Importante:** O objeto `payment` contém todos os campos da base de dados (ver *Estrutura completa — Payment* na secção 3.3). Use `payment.gateway_reference`, `payment.expires_at`, `payment.raw_response` conforme o método. O `gateway_response` é a resposta bruta do gateway; a estrutura varia — ver secção **4. Gateways de Pagamento**.
+
+**Páginas no frontend:** Usar dados dos pedidos na página **Pedidos** e dados das transações (`payments`) na página **Transações**.
+
+---
+
+#### POST `/payments` (público) — Links de pagamento (valor livre)
+
+Cria um pagamento **standalone** (sem produto nem pedido). Ideal para links de pagamento com valor definido livremente (ex.: doações, pagamentos por referência, QR com valor custom).
+
+**Não requer autenticação.**
+
+**Request:**
+```json
+{
+  "amount": 5000,
+  "currency": "AOA",
+  "payment_method": "ekwanza_ticket",
+  "mobile_number": "900123456",
+  "description": "Pagamento de serviço X"
+}
+```
+
+| Campo | Tipo | Obrigatório | Descrição |
+|-------|------|-------------|-----------|
+| amount | number | Sim | Valor a cobrar (mínimo 1) |
+| currency | string (3 chars) | Não | `AOA`, `USD`, `EUR` (default: `AOA`) |
+| payment_method | string | Sim | `gpo`, `ref` ou `ekwanza_ticket` |
+| phone_number | string (max 50) | Sim se `payment_method=gpo` | Telefone para Multicaixa Express |
+| mobile_number | string (max 50) | Sim se `payment_method=ekwanza_ticket` | Número para E-Kwanza Ticket (QR) |
+| description | string (max 500) | Não | Descrição do pagamento (para referência) |
+
+**Response 201:**
+```json
+{
+  "payment": {
+    "id": "ulid",
+    "order_id": null,
+    "gateway": "ekwanza_ticket",
+    "merchant_transaction_id": "ulid",
+    "amount": "5000.00",
+    "currency": "AOA",
+    "description": "Pagamento de serviço X",
+    "status": "processing",
+    "expires_at": "2025-02-20T10:15:00.000000Z",
     "created_at": "2025-02-20T10:00:00.000000Z"
+  },
+  "gateway_response": { }
+}
+```
+
+**Diferença para POST /orders:** Não há `order` na resposta. Use `payment.id` e `gateway_response` da mesma forma para exibir QR, referência ou mensagem de aprovação.
+
+---
+
+#### GET `/payments/{id}` (público) — Consultar status
+
+Retorna o pagamento e o seu status atual. Útil para **polling** na página de checkout (ex.: a cada 5–10 segundos até `status` ser `paid`, `failed`, `cancelled` ou `expired`).
+
+**Request:** `GET /api/v1/payments/{payment_id}`
+
+**Response 200:**
+```json
+{
+  "payment": {
+    "id": "ulid",
+    "order_id": null,
+    "gateway": "ekwanza_ticket",
+    "merchant_transaction_id": "ABC12XYZ3456789",
+    "gateway_transaction_id": null,
+    "gateway_code": null,
+    "gateway_reference": null,
+    "status": "paid",
+    "amount": "5000.00",
+    "currency": "AOA",
+    "description": null,
+    "raw_response": { },
+    "paid_at": "2025-02-20T10:05:00.000000Z",
+    "expires_at": "2025-02-20T10:15:00.000000Z",
+    "created_at": "...",
+    "updated_at": "...",
+    "order": null
   }
 }
 ```
 
-**Importante:** O frontend deve usar o `order.id` e os dados do `payment` para redirecionar o utilizador ao gateway de pagamento (AppyPay ou Ekwanza). O fluxo de pagamento externo é tratado pelos webhooks/callbacks desses gateways.
-
-**Páginas no frontend:** Usar dados dos pedidos na página **Pedidos** e dados das transações (`payments`) na página **Transações**.
+O objeto `payment` inclui todos os campos da base de dados (`gateway_reference`, `raw_response`, `expires_at`, etc.). Para pagamentos com pedido associado, `order` virá preenchido.
 
 ---
 
@@ -367,39 +501,64 @@ Lista todos os pedidos (paginação). **Apenas admin.**
 
 **Headers:** `Authorization: Bearer {token}`
 
-**Response 200:** Cada pedido inclui `payments` (lista de transações associadas).
+**Response 200:** Cada pedido inclui `customer`, `product` e `payments` (lista completa de transações). **O frontend deve usar todos os campos abaixo** para exibir as informações corretas.
 
 ```json
 {
   "data": [
     {
-      "id": "ulid",
-      "customer_id": "ulid",
-      "product_id": "ulid",
+      "id": "01HXYZ1234567890ABCDEFGHIJ",
+      "customer_id": "01HXYZ1234567890ABCDEFGHIJ",
+      "product_id": "01HXYZ1234567890ABCDEFGHIJ",
       "subtotal": "100.00",
       "discount_amount": "0.00",
       "total": "100.00",
+      "currency": "AOA",
       "status": "pending",
+      "paid_at": null,
+      "created_at": "2025-02-20T10:00:00.000000Z",
+      "updated_at": "2025-02-20T10:00:00.000000Z",
       "customer": {
-        "id": "ulid",
+        "id": "01HXYZ1234567890ABCDEFGHIJ",
         "name": "Cliente",
         "email": "cliente@exemplo.com",
         "phone": "+244 999 999 999"
       },
       "product": {
-        "id": "ulid",
+        "id": "01HXYZ1234567890ABCDEFGHIJ",
         "name": "Produto X",
         "price": "100.00",
-        "type": "ebook"
+        "type": "ebook",
+        "description": null,
+        "cover_image_url": "http://localhost/storage/products/covers/xxxx.jpg"
       },
       "payments": [
         {
-          "id": "ulid",
-          "order_id": "ulid",
-          "gateway": "appypay",
-          "amount": "100.00",
+          "id": "01HXYZ1234567890ABCDEFGHIJ",
+          "order_id": "01HXYZ1234567890ABCDEFGHIJ",
+          "gateway": "ref",
+          "merchant_transaction_id": "ABC12XYZ3456789",
+          "gateway_transaction_id": "transacao-appypay-id",
+          "gateway_code": "180162314",
+          "gateway_reference": "10111 180162314",
           "status": "pending",
-          "created_at": "2025-02-20T10:00:00.000000Z"
+          "amount": "100.00",
+          "currency": "AOA",
+          "description": null,
+          "raw_response": {
+            "id": "transacao-appypay-id",
+            "responseStatus": {
+              "reference": {
+                "entity": "10111",
+                "referenceNumber": "180162314",
+                "dueDate": "2025-02-25T23:59:59.000Z"
+              }
+            }
+          },
+          "paid_at": null,
+          "expires_at": "2025-02-25T23:59:59.000000Z",
+          "created_at": "2025-02-20T10:00:00.000000Z",
+          "updated_at": "2025-02-20T10:00:00.000000Z"
         }
       ]
     }
@@ -412,7 +571,9 @@ Lista todos os pedidos (paginação). **Apenas admin.**
 }
 ```
 
-**Estados possíveis de `status`:** `pending`, `paid`, `failed`, `cancelled`, `refunded`
+**Importante para o frontend:** use os campos da base de dados em primeiro lugar. Para **REF**, exiba `payment.gateway_reference` (ex: "10111 180162314") e `payment.expires_at`. Para **Ticket**, use `payment.raw_response.QRCode` e `payment.expires_at`. O `raw_response` contém a resposta completa do gateway e pode ser usado como alternativa.
+
+**Estados possíveis de `status` (Order):** `pending`, `processing`, `paid`, `failed`, `cancelled`, `refunded`, `expired`
 
 ---
 
@@ -817,7 +978,187 @@ Rota de teste para verificar acesso admin.
 
 ---
 
-## 4. Erros de validação (422)
+## 4. Gateways de Pagamento (E-Kwanza / AppyPay)
+
+A API integra três métodos de pagamento via E-Kwanza e Gateway App Pay (AppyPay).
+
+**Documentação oficial AppyPay:**
+- [Autenticação](https://appypay.stoplight.io/docs/appypay-payment-gateway/pfpvnxk9d44h2-appy-pay-authentication)
+- [Get a token](https://appypay.stoplight.io/docs/appypay-payment-gateway/73a20f59c9d9d-get-a-token)
+- [Post a Charge](https://appypay.stoplight.io/docs/appypay-payment-gateway/62b060530d899-post-a-charge)
+- [Get all charges](https://appypay.stoplight.io/docs/appypay-payment-gateway/a295158c1a7db-get-all-charges) | [Get all charges (alt)](https://appypay.stoplight.io/docs/appypay-payment-gateway/vjru3853j010m-get-all-charges)
+- [Get a charge](https://appypay.stoplight.io/docs/appypay-payment-gateway/b72da81707c4b-get-a-charge)
+- [**Lista de erros**](https://appypay.stoplight.io/docs/appypay-payment-gateway/0xz2op2epwc6t-errors) — códigos de erro e possíveis soluções
+
+### 4.1. Visão geral dos métodos
+
+| payment_method | Nome | Descrição | Campos extra no request |
+|----------------|------|-----------|-------------------------|
+| `gpo` | Multicaixa Express | Push no telemóvel do cliente; aprovação na app Multicaixa | `phone_number` (obrigatório) |
+| `ref` | EMIS (Referência) | Gera referência para pagamento em ATM/terminal | — |
+| `ekwanza_ticket` | E-Kwanza QR Ticket | QR Code para pagar na app E-Kwanza | `mobile_number` (obrigatório) |
+
+### 4.2. Estrutura de `gateway_response` por método
+
+#### GPO (Multicaixa Express)
+
+O cliente recebe um push na app Multicaixa Express e aprova o pagamento no telemóvel. O `gateway_response` contém a resposta do AppyPay (IDs, status, etc.).
+
+**Exemplo de `gateway_response`:**
+```json
+{
+  "id": "transacao-appypay-id",
+  "merchantTransactionId": "ulid",
+  "status": "...",
+  "amount": 90.00,
+  "currency": "AOA"
+}
+```
+
+**O que mostrar no frontend:**
+- Mensagem: "Aguardando aprovação no Multicaixa Express no seu telemóvel."
+- Instrução: "Abra a app Multicaixa Express e confirme o pagamento."
+- O status é atualizado automaticamente via webhook quando o cliente aprovar ou rejeitar.
+
+---
+
+#### REF (EMIS Referência)
+
+Gera uma referência multibanco. O cliente pode pagar em ATM ou em terminais de pagamento. O pagamento pode ser efetuado horas ou dias depois.
+
+**Exemplo de `gateway_response` (AppyPay):**
+```json
+{
+  "id": "transacao-appypay-id",
+  "merchantTransactionId": "ABC12XYZ3456789",
+  "status": "pending",
+  "amount": 90.00,
+  "currency": "AOA",
+  "responseStatus": {
+    "reference": {
+      "entity": "10111",
+      "referenceNumber": "180162314",
+      "dueDate": "2025-02-25T23:59:59.000Z"
+    }
+  }
+}
+```
+
+| Campo (responseStatus.reference) | Tipo | Descrição |
+|---------------------------------|------|-----------|
+| entity | string | Código da entidade (ex: 10111) |
+| referenceNumber | string | Referência de pagamento (ex: 180162314) |
+| dueDate | string (ISO 8601) | Data limite para pagar |
+
+**Campos guardados no Payment (base de dados):**
+- `gateway_reference` = entidade + referência (ex: "10111 180162314") — **usar este para exibir**
+- `gateway_code` = referenceNumber
+- `expires_at` = dueDate convertida
+
+**O que mostrar no frontend:**
+- Exibir `payment.gateway_reference` em destaque (ou `gateway_response.responseStatus.reference.entity` + `referenceNumber`).
+- Instrução: "Pague em qualquer ATM ou terminal com a referência acima."
+- Mostrar `payment.expires_at` formatado (ex: "Válido até 25/02/2025 23:59").
+- O status é atualizado automaticamente via webhook quando o pagamento for confirmado.
+
+---
+
+#### E-Kwanza Ticket (QR Code)
+
+Cria um QR Code para o cliente escanear na app E-Kwanza. O `gateway_response` inclui o código e a imagem em base64.
+
+**Exemplo de `gateway_response`:**
+```json
+{
+  "Code": "TICKET_CODE_123",
+  "QRCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
+  "ExpirationDate": "2025-02-20T10:15:00.000Z"
+}
+```
+
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| Code | string | Código interno do ticket (para reconciliação) |
+| QRCode | string | Imagem do QR Code em **base64** (pode incluir ou não o prefixo `data:image/png;base64,`) |
+| ExpirationDate | string (ISO 8601) | Data/hora de expiração do ticket |
+
+**Como exibir o QR no frontend:**
+
+```html
+<!-- Opção 1: se o QRCode já vier com data URI -->
+<img src="gateway_response.QRCode" alt="QR Code para pagamento" />
+
+<!-- Opção 2: se vier só o base64 puro -->
+<img src="data:image/png;base64,{{ gateway_response.QRCode }}" alt="QR Code para pagamento" />
+```
+
+```javascript
+// React / Vue — garantir data URI
+const qrSrc = gatewayResponse.QRCode?.startsWith('data:')
+  ? gatewayResponse.QRCode
+  : `data:image/png;base64,${gatewayResponse.QRCode}`;
+
+<img src={qrSrc} alt="QR Code para pagamento" />
+```
+
+**O que mostrar no frontend:**
+- Imagem do QR Code (decodificar base64).
+- Mensagem: "Escaneie com a app E-Kwanza para pagar."
+- Mostrar `ExpirationDate` formatada (ex.: "Válido até 20/02/2025 10:15").
+- O status é atualizado automaticamente via webhook quando o cliente pagar, cancelar ou o ticket expirar.
+
+### 4.3. Estados do pagamento (`payment.status`)
+
+| Status | Significado |
+|--------|-------------|
+| `pending` | Aguardando ação do cliente |
+| `processing` | Pagamento iniciado no gateway |
+| `paid` | Pago com sucesso |
+| `failed` | Falhou ou recusado |
+| `cancelled` | Cancelado pelo cliente |
+| `expired` | Expirado (ex.: QR ticket) |
+
+### 4.4. Atualização de status (webhooks)
+
+Os gateways enviam callbacks para a API. O frontend **não recebe** webhooks diretamente. As atualizações são feitas no backend; o frontend precisa de uma forma de obter o estado atual:
+
+- **Opção 1:** Polling — implementar um endpoint público `GET /orders/{id}/status` (a definir) e fazer polling a cada 5–10 segundos na página de pagamento.
+- **Opção 2:** O utilizador recarrega a página ou volta à página de confirmação; os dados virão de um endpoint que retorne o pedido atualizado.
+- **Opção 3:** WebSockets ou Server-Sent Events (não implementados na API atual).
+
+### 4.5. Mapeamento: o que exibir no frontend por método
+
+O frontend deve usar **sempre os campos do objeto `payment`** (ou `order.payments[]` em GET /orders). A API devolve todos os campos da base de dados.
+
+| Método | Campo principal a exibir | Outros campos úteis |
+|--------|--------------------------|---------------------|
+| **GPO** | Mensagem fixa: "Aguardando aprovação no Multicaixa Express" | `payment.status`, `payment.amount`, `payment.currency` |
+| **REF** | `payment.gateway_reference` (ex: "10111 180162314") | `payment.expires_at`, `payment.raw_response.responseStatus.reference` |
+| **Ticket** | `payment.raw_response.QRCode` (ou `gateway_response.QRCode` na criação) | `payment.expires_at`, `payment.raw_response.ExpirationDate` |
+
+**Lista de pedidos (GET /orders):** Cada `order.payments[]` inclui `gateway_reference`, `expires_at`, `raw_response`, `gateway`, `status`, etc. Use-os para montar a UI de cada transação (ex: badge com referência, data de validade, QR se disponível em raw_response).
+
+### 4.6. Resumo de uso no frontend
+
+| Passo | Ação |
+|-------|------|
+| 1 | Validar `payment_method` e campos obrigatórios (`phone_number` para GPO, `mobile_number` para Ticket) |
+| 2 | Enviar POST `/orders` (ou POST `/payments` para link standalone) com os dados |
+| 3 | Em caso de sucesso (201): ler `payment` e `gateway_response` conforme o `payment_method` |
+| 4 | **GPO:** Mostrar mensagem de aguardar aprovação no Multicaixa |
+| 5 | **REF:** Mostrar `payment.gateway_reference` e `payment.expires_at` para pagamento em ATM |
+| 6 | **Ticket:** Renderizar QR com `payment.raw_response.QRCode` (ou `gateway_response.QRCode`) e exibir `payment.expires_at` |
+| 7 | Em GET /orders: usar todos os campos de `order`, `customer`, `product` e `payments` para exibir a lista completa |
+| 8 | Para obter atualizações: polling (quando endpoint existir) ou recarregar página |
+
+### 4.7. Erros comuns nos gateways
+
+- **422:** Validação — `phone_number` ou `mobile_number` em falta quando obrigatório.
+- **500 / RuntimeException:** Falha ao contactar o gateway (timeout, credenciais, etc.). Mostrar mensagem genérica e sugerir nova tentativa.
+
+---
+
+## 5. Erros de validação (422)
 
 Quando a validação falha, a API retorna:
 
@@ -826,7 +1167,8 @@ Quando a validação falha, a API retorna:
   "message": "The given data was invalid.",
   "errors": {
     "email": ["O campo email é obrigatório."],
-    "gateway": ["O gateway selecionado é inválido."]
+    "payment_method": ["O método de pagamento selecionado é inválido."],
+    "phone_number": ["O número de telefone é obrigatório para Multicaixa Express."]
   }
 }
 ```
@@ -835,7 +1177,7 @@ O frontend deve exibir `errors` por campo para feedback ao utilizador.
 
 ---
 
-## 5. IDs (ULID)
+## 6. IDs (ULID)
 
 Todos os IDs principais (Order, Product, User, Customer, Payment) usam **ULID** em vez de inteiros:
 
@@ -845,7 +1187,7 @@ Todos os IDs principais (Order, Product, User, Customer, Payment) usam **ULID** 
 
 ---
 
-## 6. Resumo de permissões por role
+## 7. Resumo de permissões por role
 
 | Rota | Público | A (admin) | E (editor) | V (viewer) |
 |------|---------|-----------|------------|------------|
@@ -855,6 +1197,8 @@ Todos os IDs principais (Order, Product, User, Customer, Payment) usam **ULID** 
 | POST /forgot-password | ✓ | — | — | — |
 | POST /password/reset | ✓ | — | — | — |
 | POST /orders | ✓ | — | — | — |
+| POST /payments | ✓ | — | — | — |
+| GET /payments/{id} | ✓ | — | — | — |
 | **GET /orders** (Pedidos) | — | ✓ | — | — |
 | GET /products | — | ✓ | ✓ | ✓ |
 | GET /products/{id} | — | ✓ | ✓ | ✓ |
@@ -883,7 +1227,7 @@ Todos os IDs principais (Order, Product, User, Customer, Payment) usam **ULID** 
 
 ---
 
-## 7. Fluxo recomendado no frontend
+## 8. Fluxo recomendado no frontend
 
 1. **Login** → Usar `credentials: 'include'`. O cookie é definido pelo servidor e guardado automaticamente pelo browser.
 2. **Guardar `user`** → Armazenar os dados do utilizador (incluindo `role`) em estado (ex: React Context, Zustand, Pinia) para uso na UI.
@@ -891,15 +1235,18 @@ Todos os IDs principais (Order, Product, User, Customer, Payment) usam **ULID** 
 4. **Requisições protegidas** → Usar `credentials: 'include'` ou `withCredentials: true`. O cookie é enviado automaticamente.
 5. **401** → Redirecionar para login (o cookie foi invalidado ou expirou).
 6. **403** → Mostrar mensagem de falta de permissão.
-7. **Criar pedido** → Usar `order` e `payment` para integrar com AppyPay/Ekwanza (URLs de checkout fornecidas pelos gateways).
-8. **Produtos com ficheiro** → Para download, usar endpoint com credenciais e tratar resposta como blob/ficheiro.
+7. **Criar pedido** → Usar `payment_method` (gpo, ref, ekwanza_ticket), `phone_number` (GPO) e `mobile_number` (Ticket) conforme secção 4. Exibir QR (Ticket), referência (REF) ou mensagem de aprovação (GPO) conforme `payment` e `gateway_response` — ver mapeamento em 4.5.
+8. **Listagem de pedidos (GET /orders)** → Usar **todos** os campos de `order`, `customer`, `product` e `order.payments[]` (incluindo `gateway_reference`, `raw_response`, `expires_at`, etc.) para exibir referências, QR codes e estados.
+9. **Produtos com ficheiro** → Para download, usar endpoint com credenciais e tratar resposta como blob/ficheiro.
 
 ---
 
-## 8. CORS e cookies
+## 9. CORS e cookies
 
 A API tem `supports_credentials: true` ativado. O frontend deve estar em `allowed_origins` do `config/cors.php`. O domínio do cookie pode ser configurado em `AUTH_COOKIE_DOMAIN` (ex: `.exemplo.com` para partilhar entre `app.exemplo.com` e `api.exemplo.com`).
 
 ---
 
-**Última atualização:** fevereiro 2025
+**Última atualização:** fevereiro 2025 — Gateways E-Kwanza (GPO, REF, e-Kwanza Ticket) documentados. Estrutura completa de Order, Payment e mapeamento frontend atualizada.
+
+**Próximos passos (planeados):** Checkout completo, links de pagamento (já existe POST /payments standalone) e CRUD de cupons.

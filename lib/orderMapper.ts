@@ -21,7 +21,10 @@ const PAYMENT_STATUS_MAP: Record<string, TransactionStatus> = {
 
 const GATEWAY_TO_METHOD: Record<string, 'e-kwanza' | 'card' | 'multicaixa_express'> = {
   ekwanza: 'e-kwanza',
+  ekwanza_ticket: 'e-kwanza',
   appypay: 'multicaixa_express',
+  gpo: 'multicaixa_express',
+  ref: 'multicaixa_express',
 };
 
 function formatDate(iso: string): string {
