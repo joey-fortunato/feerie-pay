@@ -69,7 +69,17 @@ export interface OrderDisplay extends Transaction {
   createdAt?: string;
   updatedAt?: string;
   paidAt?: string | null;
-  payments?: Array<{ id: string; gateway: string; amount: string; status: string; createdAt: string }>;
+  payments?: Array<{
+    id: string;
+    gateway: string;
+    amount: string;
+    status: string;
+    createdAt: string;
+    gatewayReference?: string | null;
+    gatewayCode?: string | null;
+    expiresAt?: string | null;
+    rawResponse?: Record<string, unknown> | null;
+  }>;
 }
 
 /** Converte ApiOrder para OrderDisplay (página Pedidos). Usa payment gateway para method quando disponível. */
@@ -99,7 +109,17 @@ export function apiOrderToOrderDisplay(api: ApiOrder): OrderDisplay {
     createdAt: api.created_at,
     updatedAt: api.updated_at,
     paidAt: api.paid_at ?? undefined,
-    payments: api.payments?.map((p) => ({ id: p.id, gateway: p.gateway, amount: p.amount, status: p.status, createdAt: p.created_at })),
+    payments: api.payments?.map((p) => ({
+      id: p.id,
+      gateway: p.gateway,
+      amount: p.amount,
+      status: p.status,
+      createdAt: p.created_at,
+      gatewayReference: p.gateway_reference ?? undefined,
+      gatewayCode: p.gateway_code ?? undefined,
+      expiresAt: p.expires_at ?? undefined,
+      rawResponse: p.raw_response ?? undefined,
+    })),
   };
 }
 

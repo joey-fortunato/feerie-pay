@@ -708,7 +708,140 @@ Faz download do ficheiro do produto (se existir).
 
 ---
 
-### 3.5. Clientes (Customers) 👑
+### 3.5. Cupons (Coupons)
+
+Exigem autenticação. **Admin** e **Editor** podem criar, atualizar e apagar cupons. **Viewer** pode listar e ver detalhe.
+
+#### GET `/coupons` 🔒
+
+Lista cupons com paginação.
+
+**Query params:**
+
+| Parâmetro | Tipo | Default | Descrição |
+|-----------|------|---------|-----------|
+| page | int | 1 | Página atual |
+| per_page | int | 15 | Itens por página (máx. 50) |
+
+**Response 200:**
+```json
+{
+  "data": [
+    {
+      "id": "ulid",
+      "code": "PROMO10",
+      "type": "percentage",
+      "value": "10.00",
+      "usage_limit": 100,
+      "used_count": 5,
+      "expires_at": "2025-12-31T23:59:59.000000Z",
+      "is_active": true,
+      "created_at": "2025-02-20T10:00:00.000000Z",
+      "updated_at": "2025-02-20T10:00:00.000000Z"
+    }
+  ],
+  "meta": { "current_page": 1, "per_page": 15, "total": 10, "last_page": 1 },
+  "links": { "first": "...", "last": "...", "prev": null, "next": null }
+}
+```
+
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| code | string | Código do cupom (ex: PROMO10). Normalizado em maiúsculas |
+| type | string | `percentage` ou `fixed` |
+| value | decimal | Valor: % (0–100) ou valor fixo em moeda |
+| usage_limit | int\|null | Número máximo de usos; null = ilimitado |
+| used_count | int | Quantidade de vezes já usado (incrementa quando pedido é pago) |
+| expires_at | datetime\|null | Data de expiração; null = sem expiração |
+| is_active | bool | Se o cupom está ativo |
+
+---
+
+#### GET `/coupons/{id}` 🔒
+
+Detalhe de um cupom.
+
+---
+
+#### POST `/coupons` 🔒 👑
+
+Cria um cupom.
+
+**Request:**
+```json
+{
+  "code": "PROMO10",
+  "type": "percentage",
+  "value": 10,
+  "usage_limit": 100,
+  "expires_at": "2025-12-31T23:59:59",
+  "is_active": true
+}
+```
+
+| Campo | Tipo | Obrigatório | Descrição |
+|-------|------|-------------|-----------|
+| code | string (max 50) | Sim | Código único. Convertido em maiúsculas |
+| type | string | Sim | `percentage` ou `fixed` |
+| value | number | Sim | Valor: % (0–100) para percentage, valor fixo para fixed |
+| usage_limit | int | Não | Limite de usos; null = ilimitado |
+| expires_at | datetime | Não | Data de expiração; deve ser futura |
+| is_active | bool | Não | Default: true |
+
+**Response 201:** Objeto do cupom criado.
+
+---
+
+#### PUT/PATCH `/coupons/{id}` 🔒 👑
+
+Atualiza um cupom. Todos os campos são opcionais.
+
+---
+
+#### DELETE `/coupons/{id}` 🔒 👑
+
+Apaga um cupom.
+
+**Response 204:** Sem conteúdo.
+
+**Nota:** O cupom pode ser apagado mesmo que já tenha sido usado. O histórico de pedidos mantém `coupon_id`; a relação fica órfã (null on delete na FK).
+
+---
+
+#### GET `/coupons/validate` (público) — Validação para preview no checkout
+
+Valida um cupom e retorna o desconto calculado. **Não requer autenticação.** Permite ao frontend mostrar o desconto antes do utilizador clicar em "Pagar".
+
+**Query params:**
+
+| Parâmetro | Tipo | Descrição |
+|-----------|------|-----------|
+| code | string | Código do cupom (ex: PROMO10) |
+| amount | number | Valor subtotal em Kz (ex: 25000) |
+
+**Response 200 (válido):**
+```json
+{
+  "valid": true,
+  "discount_amount": 2500,
+  "type": "percentage",
+  "value": 10
+}
+```
+
+**Response 200 (inválido):**
+```json
+{
+  "valid": false,
+  "message": "Cupom inválido ou expirado."
+}
+```
+
+**Nota:** Endpoint opcional. Se não existir, o frontend envia `coupon_code` no POST /orders e o backend valida na criação do pedido. Em caso de cupom inválido, o backend retorna 422 com mensagem apropriada.
+
+---
+
+### 3.6. Clientes (Customers) 👑
 
 Todos exigem autenticação e **role admin**.
 
@@ -880,7 +1013,7 @@ Apaga um cliente. **Não é possível apagar** um cliente que tenha pedidos asso
 
 ---
 
-### 3.6. Utilizadores (Admin)
+### 3.7. Utilizadores (Admin)
 
 Todos exigem autenticação e **role admin**.
 
@@ -962,7 +1095,7 @@ Apaga um utilizador. Não é possível apagar a própria conta.
 
 ---
 
-### 3.7. Admin
+### 3.8. Admin
 
 #### GET `/admin` 🔒 👑
 
@@ -1126,6 +1259,40 @@ Os gateways enviam callbacks para a API. O frontend **não recebe** webhooks dir
 - **Opção 2:** O utilizador recarrega a página ou volta à página de confirmação; os dados virão de um endpoint que retorne o pedido atualizado.
 - **Opção 3:** WebSockets ou Server-Sent Events (não implementados na API atual).
 
+#### 4.4.1. Webhook AppyPay — como configurar
+
+Documentação oficial: [Merchant Webhooks](https://appypay.stoplight.io/docs/appypay-payment-gateway/3325ef2da9b78-merchant-webhooks).
+
+- **Endpoint da Feerie Pay para receber webhooks AppyPay:**
+  - URL: `POST {DOMINIO_API}/api/v1/webhooks/appypay`
+  - Exemplo: `https://api.exemplo.com/api/v1/webhooks/appypay`
+- **Autenticação / segurança:**
+  - Protegido por whitelist de IP: a middleware `WebhookIpWhitelist` verifica se o IP de origem está listado em `APPYPAY_WEBHOOK_ALLOWED_IPS` (mapeado em `services.appypay.webhook_allowed_ips`).
+  - Em produção, é obrigatório configurar os IPs oficiais da AppyPay antes de ativar o webhook.
+- **Chave de correlação usada pela Feerie Pay:**
+  - O backend procura o pagamento por `merchantTransactionId` recebido no payload:
+    - `Payment::where('merchant_transaction_id', payload.merchantTransactionId)`
+- **Mapeamento de estado (campo `operationStatus` da AppyPay → `payment.status`):**
+  - `1` → `paid`
+  - `3` → `cancelled`
+  - `4` ou `5` → `failed`
+  - Outros valores → `failed`
+
+**Passos para montar o webhook na AppyPay (backoffice):**
+1. Aceder ao painel de comerciante AppyPay.
+2. Localizar a área de **Merchant Webhooks**.
+3. Configurar a URL do webhook como `https://{DOMINIO_API}/api/v1/webhooks/appypay`.
+4. Confirmar que o método HTTP é `POST` e o formato é **JSON**.
+5. Solicitar/confirmar com a AppyPay a lista oficial de IPs de origem dos webhooks e configurá-los em `APPYPAY_WEBHOOK_ALLOWED_IPS`.
+6. Guardar/ativar o webhook.
+
+Quando um pagamento muda de estado no AppyPay, o webhook é recebido, colocado na fila (`ProcessWebhookPayload`) e:
+- Atualiza o `payment.status` e, se pago, o `payment.paid_at`.
+- Se o pagamento estiver ligado a um `order`, atualiza o `order.status` para `paid` e define `order.paid_at`.
+- Regista um `PaymentLog` com o payload recebido (auditoria).
+
+Do ponto de vista do frontend, nada muda: continua a consultar o estado via endpoints (`GET /payments/{id}`, `GET /orders`) e vê os estados já atualizados pelo webhook.
+
 ### 4.5. Mapeamento: o que exibir no frontend por método
 
 O frontend deve usar **sempre os campos do objeto `payment`** (ou `order.payments[]` em GET /orders). A API devolve todos os campos da base de dados.
@@ -1155,6 +1322,31 @@ O frontend deve usar **sempre os campos do objeto `payment`** (ou `order.payment
 
 - **422:** Validação — `phone_number` ou `mobile_number` em falta quando obrigatório.
 - **500 / RuntimeException:** Falha ao contactar o gateway (timeout, credenciais, etc.). Mostrar mensagem genérica e sugerir nova tentativa.
+
+### 4.8. Como listar transações diretamente na AppyPay
+
+Esta secção é útil para **equipa financeira / suporte** quando for necessário conferir o que está registado no gateway AppyPay, para além dos dados que já existem na base de dados da Feerie Pay.
+
+- Documentação oficial: [Get all charges](https://appypay.stoplight.io/docs/appypay-payment-gateway/a295158c1a7db-get-all-charges)
+- Endpoint base (segundo a nossa integração): `GET {APPYPAY_BASE_URL}/v2.0/charges`
+- Autenticação: **Bearer token** obtido via OAuth (mesmo fluxo descrito em `Get a token`)
+
+**Exemplo em cURL (listar cobranças):**
+
+```bash
+curl -X GET "$APPYPAY_BASE_URL/v2.0/charges" \
+  -H "Accept: application/json" \
+  -H "Authorization: Bearer SEU_TOKEN_AQUI"
+```
+
+**Notas importantes:**
+- O token usado é o mesmo que a API Feerie Pay obtém via AppyPay (OAuth). Em produção, este pedido deve ser feito a partir de um backoffice/servidor seguro, nunca diretamente do browser público.
+- A resposta é uma lista de cobranças (charges) com campos como `id`, `merchantTransactionId`, `amount`, `currency`, `status`, etc. A estrutura exata pode ser consultada na página oficial [Get all charges](https://appypay.stoplight.io/docs/appypay-payment-gateway/a295158c1a7db-get-all-charges).
+- É possível filtrar/ordenar as cobranças conforme os parâmetros suportados pela AppyPay (datas, estado, etc.) — ver documentação oficial para os filtros disponíveis.
+
+**Uso típico (equipa financeira):**
+- Pesquisar transações por `merchantTransactionId` ou por datas para cruzar com os pagamentos registados na Feerie Pay.
+- Validar estados (`status`) de cobranças diretamente no AppyPay quando houver alguma incongruência entre o gateway e a nossa base de dados.
 
 ---
 
@@ -1206,6 +1398,11 @@ Todos os IDs principais (Order, Product, User, Customer, Payment) usam **ULID** 
 | **POST /products** | — | ✓ | ✓ | — |
 | **PUT/PATCH /products/{id}** | — | ✓ | ✓ | — |
 | **DELETE /products/{id}** | — | ✓ | ✓ | — |
+| GET /coupons | — | ✓ | ✓ | ✓ |
+| GET /coupons/{id} | — | ✓ | ✓ | ✓ |
+| **POST /coupons** | — | ✓ | ✓ | — |
+| **PUT/PATCH /coupons/{id}** | — | ✓ | ✓ | — |
+| **DELETE /coupons/{id}** | — | ✓ | ✓ | — |
 | GET /customers | — | ✓ | ✓ | ✓ |
 | GET /customers/{id} | — | ✓ | ✓ | ✓ |
 | **POST /customers** | — | ✓ | — | — |
@@ -1221,7 +1418,7 @@ Todos os IDs principais (Order, Product, User, Customer, Payment) usam **ULID** 
 - **E (editor)** — Edita produtos e cupons; vê clientes. Sem acesso financeiro.
 - **V (viewer)** — Apenas visualização (produtos, clientes). Suporte nível 1.
 
-*Nota: O CRUD de cupons está em planeamento. Quando disponível, Editor terá acesso à edição.*
+*O CRUD de cupons está implementado. Editor pode criar, editar e apagar cupons.*
 
 *A API implementa estes níveis de acesso nas rotas.*
 
@@ -1249,4 +1446,4 @@ A API tem `supports_credentials: true` ativado. O frontend deve estar em `allowe
 
 **Última atualização:** fevereiro 2025 — Gateways E-Kwanza (GPO, REF, e-Kwanza Ticket) documentados. Estrutura completa de Order, Payment e mapeamento frontend atualizada.
 
-**Próximos passos (planeados):** Checkout completo, links de pagamento (já existe POST /payments standalone) e CRUD de cupons.
+**Próximos passos (planeados):** Checkout completo e links de pagamento (já existe POST /payments standalone).

@@ -1,7 +1,8 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Lock, Check, ShieldCheck, Smartphone, Loader2, Timer, User, Mail, Phone, Wallet, Copy, XCircle } from 'lucide-react';
+import { Lock, Check, ShieldCheck, Smartphone, Loader2, Timer, User, Mail, Phone, Copy, XCircle, Tag, X } from 'lucide-react';
 import { ordersApi } from '../services/ordersApi';
+import { couponsApi } from '../services/couponsApi';
 import { paymentsApi } from '../services/paymentsApi';
 import { productsApi } from '../services/productsApi';
 import { useToast } from '../contexts/ToastContext';
@@ -34,6 +35,10 @@ export const Checkout: React.FC<{ productId?: string }> = ({ productId: propProd
   const [loading, setLoading] = useState(false);
 
   const [formData, setFormData] = useState({ name: '', email: '', phone: '' });
+  const [couponInput, setCouponInput] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState<{ code: string; discountAmount: number } | null>(null);
+  const [couponError, setCouponError] = useState<string | null>(null);
+  const [couponLoading, setCouponLoading] = useState(false);
 
   const [products, setProducts] = useState<ApiProduct[]>([DEMO_PRODUCT]);
   const [selectedProductId, setSelectedProductId] = useState<string>(propProductId || DEMO_PRODUCT.id);
@@ -60,7 +65,9 @@ export const Checkout: React.FC<{ productId?: string }> = ({ productId: propProd
   const selectedProduct = products.find((p) => p.id === selectedProductId);
   const basePrice = selectedProduct ? parseFloat(selectedProduct.price) : 25000;
   const bumpPrice = 5000;
-  const total = basePrice + (orderBump ? bumpPrice : 0);
+  const subtotal = basePrice + (orderBump ? bumpPrice : 0);
+  const discountAmount = appliedCoupon?.discountAmount ?? 0;
+  const total = Math.max(0, subtotal - discountAmount);
 
   useEffect(() => {
     return () => {
@@ -99,6 +106,58 @@ export const Checkout: React.FC<{ productId?: string }> = ({ productId: propProd
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
+  };
+
+  const calculateDiscount = (
+    subtotalVal: number,
+    type: 'percentage' | 'fixed',
+    value: number
+  ): number => {
+    if (type === 'percentage') {
+      return Math.round(subtotalVal * (value / 100));
+    }
+    return Math.min(value, subtotalVal);
+  };
+
+  const handleApplyCoupon = async () => {
+    const code = couponInput.trim().toUpperCase();
+    if (!code) {
+      setCouponError('Digite o código do cupom.');
+      return;
+    }
+    setCouponError(null);
+    setCouponLoading(true);
+    try {
+      const res = await couponsApi.validate(code, subtotal);
+      if (res?.valid === false && res.message) {
+        setCouponError(res.message);
+        setAppliedCoupon(null);
+      } else if (res?.valid) {
+        let discount = 0;
+        const rawAmount = res.discount_amount;
+        if (rawAmount != null) {
+          discount = typeof rawAmount === 'string' ? parseFloat(rawAmount) || 0 : rawAmount;
+        }
+        if (discount <= 0 && res.type && res.value != null) {
+          discount = calculateDiscount(subtotal, res.type, typeof res.value === 'string' ? parseFloat(res.value) : res.value);
+        }
+        setAppliedCoupon({ code, discountAmount: Math.max(0, discount) });
+        setCouponInput('');
+      } else {
+        setAppliedCoupon({ code, discountAmount: 0 });
+        setCouponInput('');
+      }
+    } catch {
+      setAppliedCoupon({ code, discountAmount: 0 });
+      setCouponInput('');
+    } finally {
+      setCouponLoading(false);
+    }
+  };
+
+  const handleRemoveCoupon = () => {
+    setAppliedCoupon(null);
+    setCouponError(null);
   };
 
   const startPolling = useCallback((paymentId: string) => {
@@ -154,6 +213,7 @@ export const Checkout: React.FC<{ productId?: string }> = ({ productId: propProd
     };
     if (paymentMethod === 'gpo') (payload as { phone_number?: string }).phone_number = phoneFormatted;
     if (paymentMethod === 'ekwanza_ticket') (payload as { mobile_number?: string }).mobile_number = mobileNumber;
+    if (appliedCoupon?.code) (payload as { coupon_code?: string }).coupon_code = appliedCoupon.code;
 
     setLoading(true);
     try {
@@ -178,6 +238,8 @@ export const Checkout: React.FC<{ productId?: string }> = ({ productId: propProd
 
   const payment = orderResponse?.payment;
   const gatewayResponse = orderResponse?.gateway_response;
+  const orderTotal = orderResponse?.order ? parseFloat(orderResponse.order.total) : null;
+  const displayTotal = orderTotal != null ? orderTotal : total;
 
   const getQRsrc = (): string | null => {
     const raw = payment?.raw_response;
@@ -250,7 +312,7 @@ export const Checkout: React.FC<{ productId?: string }> = ({ productId: propProd
             </div>
             <div className="flex justify-between text-sm mt-2 pt-2 border-t border-gray-200">
               <span className="text-gray-500">Total Pago:</span>
-              <span className="font-bold text-brand-primary">Kz {total.toLocaleString()}</span>
+              <span className="font-bold text-brand-primary">Kz {displayTotal.toLocaleString()}</span>
             </div>
           </div>
           <button
@@ -280,7 +342,7 @@ export const Checkout: React.FC<{ productId?: string }> = ({ productId: propProd
               <span className="font-medium text-sm tracking-wide">CHECKOUT SEGURO</span>
             </div>
             <h1 className="text-3xl lg:text-4xl font-bold mb-4">{selectedProduct?.name || 'Produto'}</h1>
-            <p className="text-gray-300 text-lg">Total: Kz {total.toLocaleString()}</p>
+            <p className="text-gray-300 text-lg">Total: Kz {displayTotal.toLocaleString()}</p>
           </div>
           <div className="absolute top-0 right-0 w-64 h-64 bg-brand-primary/20 rounded-full blur-3xl -mr-16 -mt-16"></div>
         </div>
@@ -357,7 +419,7 @@ export const Checkout: React.FC<{ productId?: string }> = ({ productId: propProd
                       <div className="flex items-center justify-between px-6 py-3">
                         <span className="text-gray-500">Valor:</span>
                         <span className="font-mono font-semibold text-dark-text">
-                          {amount ? `${amount.toFixed(2)} Kz` : `Kz ${total.toLocaleString()}`}
+                          {amount ? `${amount.toFixed(2)} Kz` : `Kz ${displayTotal.toLocaleString()}`}
                         </span>
                       </div>
                       <div className="flex items-center justify-between px-6 py-3">
@@ -430,8 +492,20 @@ export const Checkout: React.FC<{ productId?: string }> = ({ productId: propProd
             <p className="text-gray-300 text-lg leading-relaxed">Checkout seguro via Feerie Pay.</p>
           </div>
         </div>
-        <div className="relative z-10 pt-8 border-t border-white/10">
-          <div className="flex justify-between items-end">
+        <div className="relative z-10 pt-8 border-t border-white/10 space-y-2">
+          {discountAmount > 0 && (
+            <>
+              <div className="flex justify-between text-sm text-gray-400">
+                <span>Subtotal</span>
+                <span>Kz {subtotal.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between text-sm text-green-400">
+                <span>Desconto ({appliedCoupon?.code})</span>
+                <span>- Kz {discountAmount.toLocaleString()}</span>
+              </div>
+            </>
+          )}
+          <div className="flex justify-between items-end pt-1">
             <span className="text-gray-400">Total a pagar</span>
             <span className="text-3xl font-bold">Kz {total.toLocaleString()}</span>
           </div>
@@ -548,6 +622,55 @@ export const Checkout: React.FC<{ productId?: string }> = ({ productId: propProd
                 <p className="text-xs text-gray-600 mt-1">Adicione uma sessão por apenas <span className="font-bold text-red-500">+ Kz {bumpPrice.toLocaleString()}</span>.</p>
               </div>
             </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-semibold text-gray-700 block">Cupom de desconto</label>
+            {appliedCoupon ? (
+              <div className="flex items-center justify-between p-3 rounded-xl border-2 border-green-200 bg-green-50">
+                <div className="flex items-center gap-2">
+                  <Tag size={18} className="text-green-600" />
+                  <span className="font-semibold text-green-800">{appliedCoupon.code}</span>
+                  {appliedCoupon.discountAmount > 0 && (
+                    <span className="text-xs text-green-600">- Kz {appliedCoupon.discountAmount.toLocaleString()}</span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={handleRemoveCoupon}
+                  className="p-1 rounded-lg hover:bg-green-200/50 transition-colors"
+                  aria-label="Remover cupom"
+                >
+                  <X size={16} className="text-green-700" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Tag size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="text"
+                    value={couponInput}
+                    onChange={(e) => { setCouponInput(e.target.value.toUpperCase()); setCouponError(null); }}
+                    placeholder="Código do cupom"
+                    className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-200 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all bg-gray-50/50"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={handleApplyCoupon}
+                  disabled={couponLoading || !couponInput.trim()}
+                  className="px-4 py-3 rounded-xl bg-gray-100 hover:bg-gray-200 font-medium text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+                >
+                  {couponLoading ? <Loader2 size={18} className="animate-spin" /> : 'Aplicar'}
+                </button>
+              </div>
+            )}
+            {couponError && (
+              <p className="text-sm text-red-600 flex items-center gap-1">
+                <XCircle size={14} /> {couponError}
+              </p>
+            )}
           </div>
 
           <button type="submit" disabled={loading}

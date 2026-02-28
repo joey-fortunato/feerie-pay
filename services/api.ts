@@ -24,6 +24,11 @@ export function getFriendlyErrorMessage(message: string): string {
   if (lower.includes('duplicate') && lower.includes('unique')) {
     return 'Este registo já existe. Verifique se o email ou telefone não estão em uso.';
   }
+  if (lower.includes('coupon') || lower.includes('cupom')) {
+    if (lower.includes('invalid') || lower.includes('inválido') || lower.includes('expirado') || lower.includes('expired')) {
+      return 'Cupom inválido ou expirado.';
+    }
+  }
   if (lower.includes('integrity constraint violation')) {
     return 'Não foi possível guardar. Pode haver dados duplicados (email ou telefone já em uso).';
   }

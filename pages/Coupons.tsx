@@ -1,59 +1,60 @@
 
-import React, { useState } from 'react';
-import { Search, Plus, TicketPercent, Copy, Check, Trash2, Clock, DollarSign, Percent, RefreshCw, X, Edit3, AlertCircle, Filter } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Search, Plus, TicketPercent, Copy, Check, Trash2, Clock, DollarSign, Percent, RefreshCw, X, Edit3, Filter, Loader2 } from 'lucide-react';
 import { Coupon } from '../types';
+import { couponsApi, type ApiCoupon } from '../services/couponsApi';
+import { useToast } from '../contexts/ToastContext';
+import { ApiError, getFriendlyErrorMessage } from '../services/api';
 
-// Mock Data
-const initialCoupons: Coupon[] = [
-  {
-    id: 'CPN-001',
-    code: 'BEMVINDO10',
-    type: 'percentage',
-    value: 10,
-    usedCount: 145,
-    maxUses: null,
-    status: 'active',
-    expiryDate: null,
-  },
-  {
-    id: 'CPN-002',
-    code: 'NATAL5000',
-    type: 'fixed',
-    value: 5000,
-    usedCount: 48,
-    maxUses: 100,
-    status: 'active',
-    expiryDate: '25 Dez, 2024',
-  },
-  {
-    id: 'CPN-003',
-    code: 'BLACKFRIDAY',
-    type: 'percentage',
-    value: 50,
-    usedCount: 500,
-    maxUses: 500,
-    status: 'expired',
-    expiryDate: '25 Nov, 2023',
-  },
-  {
-    id: 'CPN-004',
-    code: 'VIP_SECRET',
-    type: 'percentage',
-    value: 25,
-    usedCount: 5,
-    maxUses: 50,
-    status: 'paused',
-    expiryDate: null,
-  },
-];
+function apiCouponToCoupon(api: ApiCoupon): Coupon {
+  const exp = api.expires_at ? new Date(api.expires_at) : null;
+  const now = new Date();
+  let status: Coupon['status'] = api.is_active ? 'active' : 'paused';
+  if (exp && exp < now) status = 'expired';
+  const day = exp ? exp.getUTCDate().toString().padStart(2, '0') : null;
+  const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+  const expiryDate = exp ? `${day} ${months[exp.getUTCMonth()]}, ${exp.getUTCFullYear()}` : null;
+  return {
+    id: api.id,
+    code: api.code,
+    type: api.type,
+    value: parseFloat(api.value),
+    usedCount: api.used_count,
+    maxUses: api.usage_limit,
+    status,
+    expiryDate,
+  };
+}
 
 export const Coupons: React.FC = () => {
-  const [coupons, setCoupons] = useState<Coupon[]>(initialCoupons);
+  const toast = useToast();
+  const [coupons, setCoupons] = useState<Coupon[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'paused' | 'expired'>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+
+  const fetchCoupons = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const res = await couponsApi.list(1, 50);
+      const data = Array.isArray((res as { data?: unknown }).data)
+        ? (res as { data: ApiCoupon[] }).data
+        : (res as ApiCoupon[]);
+      setCoupons(data.map(apiCouponToCoupon));
+    } catch (err) {
+      toast.error(getFriendlyErrorMessage(err instanceof ApiError ? err.message : 'Erro ao carregar cupons.'));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    fetchCoupons();
+  }, [fetchCoupons]);
 
   // Form State
   const [formData, setFormData] = useState<{
@@ -78,9 +79,14 @@ export const Coupons: React.FC = () => {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const handleDelete = (id: string) => {
-    if (confirm('Tem certeza que deseja excluir este cupom?')) {
+  const handleDelete = async (id: string) => {
+    if (!confirm('Tem certeza que deseja excluir este cupom?')) return;
+    try {
+      await couponsApi.delete(id);
       setCoupons(coupons.filter(c => c.id !== id));
+      toast.success('Cupom excluído.');
+    } catch (err) {
+      toast.error(getFriendlyErrorMessage(err instanceof ApiError ? err.message : 'Erro ao excluir cupom.'));
     }
   };
 
@@ -155,42 +161,65 @@ export const Coupons: React.FC = () => {
     setFormData({ ...formData, code: result });
   };
 
-  const handleSave = () => {
-    if (!formData.code || !formData.value) return;
-
-    const formattedDate = formData.expiryDate 
-      ? formatDateForDisplay(formData.expiryDate) 
-      : null;
-
-    if (editingId) {
-      // Update existing
-      setCoupons(coupons.map(c => c.id === editingId ? {
-        ...c,
-        code: formData.code.toUpperCase(),
-        type: formData.type,
-        value: parseFloat(formData.value),
-        maxUses: formData.maxUses ? parseInt(formData.maxUses) : null,
-        expiryDate: formattedDate,
-        status: formData.status
-      } : c));
-    } else {
-      // Create new
-      const newCoupon: Coupon = {
-        id: `CPN-${Math.floor(Math.random() * 10000)}`,
-        code: formData.code.toUpperCase(),
-        type: formData.type,
-        value: parseFloat(formData.value),
-        usedCount: 0,
-        maxUses: formData.maxUses ? parseInt(formData.maxUses) : null,
-        status: formData.status,
-        expiryDate: formattedDate,
-      };
-      setCoupons([newCoupon, ...coupons]);
+  const handleSave = async () => {
+    if (!formData.code.trim() || !formData.value) {
+      toast.error('Preencha o código e o valor.');
+      return;
     }
+    const code = formData.code.trim().toUpperCase();
+    const value = parseFloat(formData.value);
+    const usageLimit = formData.maxUses ? parseInt(formData.maxUses, 10) : null;
+    const expiresAt = formData.expiryDate ? `${formData.expiryDate}T23:59:59.000Z` : null;
+    const isActive = formData.status === 'active';
 
-    setIsModalOpen(false);
-    setFormData({ code: '', type: 'percentage', value: '', maxUses: '', expiryDate: '', status: 'active' });
-    setEditingId(null);
+    setIsSaving(true);
+    try {
+      if (editingId) {
+        await couponsApi.update(editingId, {
+          code,
+          type: formData.type,
+          value,
+          usage_limit: usageLimit,
+          expires_at: expiresAt,
+          is_active: isActive,
+        });
+        const updated = coupons.map(c =>
+          c.id === editingId
+            ? {
+                ...c,
+                code,
+                type: formData.type,
+                value,
+                maxUses: usageLimit,
+                expiryDate: formData.expiryDate ? formatDateForDisplay(formData.expiryDate) : null,
+                status: formData.status,
+              }
+            : c
+        );
+        setCoupons(updated);
+        toast.success('Cupom atualizado.');
+      } else {
+        const res = await couponsApi.create({
+          code,
+          type: formData.type,
+          value,
+          usage_limit: usageLimit,
+          expires_at: expiresAt,
+          is_active: isActive,
+        });
+        const raw = (res as { data?: ApiCoupon }).data ?? (res as ApiCoupon);
+        const newCoupon = apiCouponToCoupon(raw);
+        setCoupons([newCoupon, ...coupons]);
+        toast.success('Cupom criado.');
+      }
+      setIsModalOpen(false);
+      setFormData({ code: '', type: 'percentage', value: '', maxUses: '', expiryDate: '', status: 'active' });
+      setEditingId(null);
+    } catch (err) {
+      toast.error(getFriendlyErrorMessage(err instanceof ApiError ? err.message : 'Erro ao guardar cupom.'));
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Helper to render the discount badge
@@ -273,6 +302,11 @@ export const Coupons: React.FC = () => {
       </div>
 
       {/* Grid */}
+      {isLoading ? (
+        <div className="flex items-center justify-center py-20">
+          <Loader2 size={32} className="animate-spin text-brand-primary" />
+        </div>
+      ) : (
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {filteredCoupons.map((coupon) => (
           <div key={coupon.id} className="bg-white rounded-2xl p-5 shadow-soft border border-gray-100 flex flex-col justify-between relative overflow-hidden group">
@@ -355,6 +389,7 @@ export const Coupons: React.FC = () => {
            <h3 className="text-base font-bold text-gray-400 group-hover:text-brand-primary transition-colors">Criar Novo Cupom</h3>
         </button>
       </div>
+      )}
 
       {/* Create/Edit Coupon Modal */}
       {isModalOpen && (
@@ -478,9 +513,10 @@ export const Coupons: React.FC = () => {
                 </button>
                 <button 
                   onClick={handleSave}
-                  className="px-6 py-2 bg-brand-primary text-white font-bold rounded-lg hover:bg-brand-hover shadow-md shadow-indigo-200"
+                  disabled={isSaving}
+                  className="px-6 py-2 bg-brand-primary text-white font-bold rounded-lg hover:bg-brand-hover shadow-md shadow-indigo-200 disabled:opacity-70 disabled:cursor-not-allowed flex items-center gap-2"
                 >
-                  {editingId ? 'Salvar Alterações' : 'Criar Cupom'}
+                  {isSaving ? <><Loader2 size={16} className="animate-spin" /> Guardando...</> : (editingId ? 'Salvar Alterações' : 'Criar Cupom')}
                 </button>
              </div>
 

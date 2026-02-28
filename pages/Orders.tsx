@@ -180,6 +180,30 @@ export const Orders: React.FC = () => {
   const totalRevenuePage = orders.reduce((acc, o) => acc + o.amount, 0);
   const averageTicket = orders.length > 0 ? totalRevenuePage / orders.length : 0;
 
+  const getRefInfoFromPayment = (p: NonNullable<OrderDisplay['payments']>[number]) => {
+    const raw = p.rawResponse as
+      | { responseStatus?: { reference?: { entity?: string; referenceNumber?: string } } }
+      | null
+      | undefined;
+    const ref = raw?.responseStatus?.reference;
+    const entityFromRaw = ref?.entity;
+    const refNumFromRaw = ref?.referenceNumber;
+
+    const parts = (p.gatewayReference || '').trim().split(/\s+/);
+    const entityFromGateway = parts[0] || undefined;
+    const refFromGateway = parts.slice(1).join(' ') || undefined;
+
+    const entity = entityFromRaw || entityFromGateway || '10111';
+    const reference =
+      refNumFromRaw ||
+      refFromGateway ||
+      p.gatewayCode ||
+      p.gatewayReference ||
+      '—';
+
+    return { entity, reference, expiresAt: p.expiresAt };
+  };
+
   return (
     <div className="p-6 lg:p-10 max-w-7xl mx-auto relative space-y-8">
       {error && (
@@ -475,6 +499,29 @@ export const Orders: React.FC = () => {
                         <p className="text-xs text-gray-500">
                           {p.status === 'paid' ? 'Pago' : p.status === 'failed' ? 'Falhou' : 'Pendente'}
                         </p>
+                        {p.gateway === 'ref' && (
+                          (() => {
+                            const { entity, reference, expiresAt } = getRefInfoFromPayment(p);
+                            return (
+                              <div className="mt-1 space-y-0.5 text-xs text-gray-500">
+                                <p>
+                                  <span className="font-medium text-gray-600">Entidade:</span>{' '}
+                                  <span className="font-mono text-gray-800">{entity}</span>
+                                </p>
+                                <p>
+                                  <span className="font-medium text-gray-600">Referência:</span>{' '}
+                                  <span className="font-mono text-gray-800">{reference}</span>
+                                </p>
+                                {expiresAt && (
+                                  <p>
+                                    <span className="font-medium text-gray-600">Validade:</span>{' '}
+                                    <span className="text-gray-700">{formatDateTime(expiresAt)}</span>
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })()
+                        )}
                       </div>
                     ))}
                   </div>
