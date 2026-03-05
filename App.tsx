@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { Dashboard } from './pages/Dashboard';
@@ -16,22 +17,90 @@ import { Login } from './pages/Login';
 import { ViewState } from './types';
 import { useAuth } from './contexts/AuthContext';
 
+const getViewFromPath = (pathname: string): ViewState => {
+  switch (pathname) {
+    case '/':
+      return 'dashboard';
+    case '/reports':
+      return 'reports';
+    case '/orders':
+      return 'orders';
+    case '/transactions':
+      return 'transactions';
+    case '/products':
+      return 'products';
+    case '/payment-links':
+      return 'payment_links';
+    case '/clients':
+      return 'clients';
+    case '/coupons':
+      return 'coupons';
+    case '/team':
+      return 'team';
+    case '/profile':
+      return 'profile';
+    case '/checkout-preview':
+      return 'checkout_preview';
+    default:
+      return 'dashboard';
+  }
+};
+
+const getPathFromView = (view: ViewState): string => {
+  switch (view) {
+    case 'dashboard':
+      return '/';
+    case 'reports':
+      return '/reports';
+    case 'orders':
+      return '/orders';
+    case 'transactions':
+      return '/transactions';
+    case 'products':
+      return '/products';
+    case 'payment_links':
+      return '/payment-links';
+    case 'clients':
+      return '/clients';
+    case 'coupons':
+      return '/coupons';
+    case 'team':
+      return '/team';
+    case 'profile':
+      return '/profile';
+    case 'checkout_preview':
+      return '/checkout-preview';
+    default:
+      return '/';
+  }
+};
+
 const App: React.FC = () => {
   const { isAuthenticated, isLoading } = useAuth();
-  const [currentView, setCurrentView] = useState<ViewState>('dashboard');
+  const location = useLocation();
+  const navigate = useNavigate();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
-  // Public View: Checkout Preview (accessible without login)
+  const currentView = getViewFromPath(location.pathname);
+
+  const handleChangeView = (view: ViewState) => {
+    const path = getPathFromView(view);
+    if (path !== location.pathname) {
+      navigate(path);
+    }
+  };
+
+  // Public View: Checkout Preview (acessível sem login)
   if (currentView === 'checkout_preview') {
     return (
       <>
         <div className="fixed top-4 left-4 z-50">
-           <button 
-             onClick={() => setCurrentView('dashboard')}
-             className="bg-white/80 backdrop-blur text-xs font-medium px-3 py-2 rounded-lg border border-gray-200 shadow-sm hover:bg-white transition-colors flex items-center gap-2"
-           >
-             ← Voltar ao Dashboard
-           </button>
+          <button
+            onClick={() => handleChangeView('dashboard')}
+            className="bg-white/80 backdrop-blur text-xs font-medium px-3 py-2 rounded-lg border border-gray-200 shadow-sm hover:bg-white transition-colors flex items-center gap-2"
+          >
+            ← Voltar ao Dashboard
+          </button>
         </div>
         <Checkout />
       </>
@@ -83,39 +152,50 @@ const App: React.FC = () => {
   };
 
   const getTitle = () => {
-     switch(currentView) {
-       case 'dashboard': return 'Visão Geral';
-       case 'reports': return 'Relatórios & Analytics';
-       case 'orders': return 'Pedidos';
-       case 'transactions': return 'Transações';
-       case 'products': return 'Meus Produtos';
-       case 'payment_links': return 'Links de Pagamento';
-       case 'clients': return 'Base de Clientes';
-       case 'coupons': return 'Cupons de Desconto';
-       case 'team': return 'Gestão de Equipe';
-       case 'profile': return 'Meu Perfil';
-       default: return '';
-     }
-  }
+    switch (currentView) {
+      case 'dashboard':
+        return 'Visão Geral';
+      case 'reports':
+        return 'Relatórios & Analytics';
+      case 'orders':
+        return 'Pedidos';
+      case 'transactions':
+        return 'Transações';
+      case 'products':
+        return 'Meus Produtos';
+      case 'payment_links':
+        return 'Links de Pagamento';
+      case 'clients':
+        return 'Base de Clientes';
+      case 'coupons':
+        return 'Cupons de Desconto';
+      case 'team':
+        return 'Gestão de Equipe';
+      case 'profile':
+        return 'Meu Perfil';
+      default:
+        return '';
+    }
+  };
 
   return (
     <div className="h-screen w-full bg-bg-main flex overflow-hidden">
       {/* Sidebar sits in the flex flow on desktop, fixed drawer on mobile */}
       <Sidebar
         currentView={currentView}
-        onChangeView={setCurrentView}
+        onChangeView={handleChangeView}
         mobileOpen={mobileSidebarOpen}
         setMobileOpen={setMobileSidebarOpen}
       />
-      
+
       {/* Main Content Wrapper */}
       <div className="flex-1 flex flex-col h-full min-w-0 relative">
-        <TopBar 
-          onMenuClick={() => setMobileSidebarOpen(true)} 
-          onProfileClick={() => setCurrentView('profile')}
+        <TopBar
+          onMenuClick={() => setMobileSidebarOpen(true)}
+          onProfileClick={() => handleChangeView('profile')}
           title={getTitle()}
         />
-        
+
         {/* Scrollable Content Area */}
         <main className="flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar scroll-smooth">
           {renderContent()}

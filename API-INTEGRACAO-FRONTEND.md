@@ -69,6 +69,19 @@ const isViewerOnly = user.role === 'viewer';
 - **Públicas**: não exigem token (`login`, `orders`, `forgot-password`, `password/reset`).
 - **Protegidas**: exigem token (`/me`, `logout`, produtos, clientes, utilizadores, listagem de pedidos).
 
+**Rate Limiting nas rotas públicas:**
+
+| Rota | Limite | Descrição |
+|------|--------|-----------|
+| `POST /orders` | 10 req/min por IP | Criação de pedidos |
+| `POST /payments` | 10 req/min por IP | Criação de pagamentos standalone |
+| `GET /payments/{id}` | 30 req/min por IP | Polling de status (permite verificações frequentes) |
+| `POST /forgot-password` | 3 req/min por IP | Reset de password |
+| `POST /password/reset` | 3 req/min por IP | Reset de password |
+| `POST /login` | 3 req/min por IP | Login |
+
+Quando o limite é excedido, a API retorna **429** com header `Retry-After`.
+
 ### 2.4. Respostas de erro comuns
 
 | Código | Situação | Exemplo de mensagem |
@@ -379,7 +392,7 @@ Cria um novo pedido e inicia o pagamento no gateway escolhido. **Não requer aut
 - `mobile_number` obrigatório quando `payment_method` = `ekwanza_ticket`
 - `ref` não requer `phone_number` nem `mobile_number`
 
-**Response 201:**
+**Response 201 (pedido novo):**
 ```json
 {
   "order": { "id": "...", "customer_id": "...", "product_id": "...", "subtotal": "100.00", "discount_amount": "10.00", "total": "90.00", "currency": "AOA", "status": "pending", "paid_at": null, "created_at": "...", "updated_at": "..." },
@@ -405,6 +418,8 @@ Cria um novo pedido e inicia o pagamento no gateway escolhido. **Não requer aut
 }
 ```
 
+**Response 200 (pedido duplicado):** Se o mesmo cliente (email) já tem um pedido `pending` para o mesmo produto, a API retorna o pedido e pagamento existentes **sem criar duplicados**. O frontend recebe a mesma estrutura de dados e pode funcionar normalmente. Isto protege contra double-click ou refresh do utilizador.
+
 **Importante:** O objeto `payment` contém todos os campos da base de dados (ver *Estrutura completa — Payment* na secção 3.3). Use `payment.gateway_reference`, `payment.expires_at`, `payment.raw_response` conforme o método. O `gateway_response` é a resposta bruta do gateway; a estrutura varia — ver secção **4. Gateways de Pagamento**.
 
 **Páginas no frontend:** Usar dados dos pedidos na página **Pedidos** e dados das transações (`payments`) na página **Transações**.
@@ -415,7 +430,7 @@ Cria um novo pedido e inicia o pagamento no gateway escolhido. **Não requer aut
 
 Cria um pagamento **standalone** (sem produto nem pedido). Ideal para links de pagamento com valor definido livremente (ex.: doações, pagamentos por referência, QR com valor custom).
 
-**Não requer autenticação.**
+**Não requer autenticação.** Pode ser usado de forma direta (por exemplo, a partir de um botão "Pagar agora" com valor fixo) ou em conjunto com os **Payment Links** (ver abaixo), onde o frontend resolve um `slug` e, em seguida, chama este endpoint com o valor e método escolhidos.
 
 **Request:**
 ```json
@@ -460,6 +475,70 @@ Cria um pagamento **standalone** (sem produto nem pedido). Ideal para links de p
 
 ---
 
+#### Payment Links — visão geral (admin/editor)
+
+Além do `POST /payments` direto, o backend suporta **Payment Links** persistentes — links configuráveis que podem ter:
+
+- Título e descrição (ex.: "Pagamento de Consultoria", "Doação Feerie")
+- Valor fixo **ou** valor customizável (`allow_custom_amount` com `min_amount`/`max_amount`)
+- Métodos permitidos (`allowed_methods`: `gpo`, `ref`, `ekwanza_ticket`)
+- Data de expiração (`expires_at`) e limite de utilizações (`max_uses`)
+
+No backend existe o modelo `PaymentLink`, mas o frontend interage principalmente com:
+
+- **Admin/Editor (backoffice):**
+  - CRUD autenticado em `/payment-links` (ver matriz de permissões na secção 7)
+  - Cada link gera um `slug` e uma `public_url` que pode ser partilhada com o cliente
+- **Público (checkout via link):**
+  - Resolve o link e obtém os dados de configuração através de:
+    - `GET /pay/{slug}`
+  - Depois, o frontend chama `POST /payments` com:
+    - `amount` definido (fixo ou escolhido pelo utilizador dentro de `min_amount`/`max_amount`)
+    - `payment_method` permitido (`gpo`, `ref` ou `ekwanza_ticket`)
+    - Campos adicionais (`phone_number` ou `mobile_number`) conforme o método
+
+#### GET `/pay/{slug}` (público) — Resolver Payment Link
+
+Retorna os dados de um Payment Link público. Usado para montar a página de checkout a partir de um link partilhável.
+
+**Request:** `GET /api/v1/pay/{slug}`
+
+**Response 200 (link utilizável):**
+```json
+{
+  "title": "Pagamento de Consultoria",
+  "description": "Sessão de 1h de consultoria Feerie",
+  "amount": "15000.00",
+  "currency": "AOA",
+  "allow_custom_amount": false,
+  "min_amount": null,
+  "max_amount": null,
+  "allowed_methods": ["gpo", "ref", "ekwanza_ticket"]
+}
+```
+
+**Response 410 (link expirado / inativo / sem mais utilizações):**
+```json
+{
+  "message": "Este link de pagamento não está disponível."
+}
+```
+
+**Como o frontend deve usar:**
+
+1. Quando o utilizador abre `https://app.exemplo.com/pay/{slug}`, o frontend chama `GET /api/v1/pay/{slug}`.
+2. Usa a resposta para:
+   - Exibir o título/descrição
+   - Decidir se mostra um campo de montante (`allow_custom_amount`) e os limites (`min_amount`/`max_amount`)
+   - Mostrar apenas os métodos permitidos (`allowed_methods`)
+3. Ao confirmar, o frontend chama `POST /payments` com:
+   - `amount` (fixo ou escolhido)
+   - `payment_method` (um dos `allowed_methods`)
+   - `phone_number` / `mobile_number` conforme o método
+4. A partir daí, o fluxo é igual ao de qualquer pagamento standalone: usar `payment` + `gateway_response` e `GET /payments/{id}` para polling.
+
+---
+
 #### GET `/payments/{id}` (público) — Consultar status
 
 Retorna o pagamento e o seu status atual. Útil para **polling** na página de checkout (ex.: a cada 5–10 segundos até `status` ser `paid`, `failed`, `cancelled` ou `expired`).
@@ -481,17 +560,19 @@ Retorna o pagamento e o seu status atual. Útil para **polling** na página de c
     "amount": "5000.00",
     "currency": "AOA",
     "description": null,
-    "raw_response": { },
     "paid_at": "2025-02-20T10:05:00.000000Z",
     "expires_at": "2025-02-20T10:15:00.000000Z",
     "created_at": "...",
     "updated_at": "...",
+    "qr_code": "data:image/png;base64,...",
     "order": null
   }
 }
 ```
 
-O objeto `payment` inclui todos os campos da base de dados (`gateway_reference`, `raw_response`, `expires_at`, etc.). Para pagamentos com pedido associado, `order` virá preenchido.
+**Nota de segurança:** Os campos `raw_response` e `payload` **não são expostos** neste endpoint público. Em vez disso, para pagamentos **E-Kwanza Ticket**, o campo `qr_code` é extraído e exposto directamente (contém a imagem base64 do QR Code). Para **REF**, use `gateway_reference` (ex: "10111 180162314"). Para **GPO**, não há dados adicionais a exibir.
+
+Para pagamentos com pedido associado, `order` virá preenchido.
 
 ---
 
@@ -501,7 +582,7 @@ Lista todos os pedidos (paginação). **Apenas admin.**
 
 **Headers:** `Authorization: Bearer {token}`
 
-**Response 200:** Cada pedido inclui `customer`, `product` e `payments` (lista completa de transações). **O frontend deve usar todos os campos abaixo** para exibir as informações corretas.
+**Response 200:** Cada pedido inclui `customer`, `product`, `coupon` e `payments` (lista completa de transações). **O frontend deve usar todos os campos abaixo** para exibir as informações corretas.
 
 ```json
 {
@@ -510,9 +591,10 @@ Lista todos os pedidos (paginação). **Apenas admin.**
       "id": "01HXYZ1234567890ABCDEFGHIJ",
       "customer_id": "01HXYZ1234567890ABCDEFGHIJ",
       "product_id": "01HXYZ1234567890ABCDEFGHIJ",
+      "coupon_id": "01HXYZ1234567890ABCDEFGHIJ",
       "subtotal": "100.00",
-      "discount_amount": "0.00",
-      "total": "100.00",
+      "discount_amount": "15.00",
+      "total": "85.00",
       "currency": "AOA",
       "status": "pending",
       "paid_at": null,
@@ -531,6 +613,16 @@ Lista todos os pedidos (paginação). **Apenas admin.**
         "type": "ebook",
         "description": null,
         "cover_image_url": "http://localhost/storage/products/covers/xxxx.jpg"
+      },
+      "coupon": {
+        "id": "01HXYZ1234567890ABCDEFGHIJ",
+        "code": "PROMO15",
+        "type": "percentage",
+        "value": "15.00",
+        "usage_limit": 100,
+        "used_count": 5,
+        "expires_at": "2026-12-31T23:59:59.000000Z",
+        "is_active": true
       },
       "payments": [
         {
@@ -805,39 +897,6 @@ Apaga um cupom.
 **Response 204:** Sem conteúdo.
 
 **Nota:** O cupom pode ser apagado mesmo que já tenha sido usado. O histórico de pedidos mantém `coupon_id`; a relação fica órfã (null on delete na FK).
-
----
-
-#### GET `/coupons/validate` (público) — Validação para preview no checkout
-
-Valida um cupom e retorna o desconto calculado. **Não requer autenticação.** Permite ao frontend mostrar o desconto antes do utilizador clicar em "Pagar".
-
-**Query params:**
-
-| Parâmetro | Tipo | Descrição |
-|-----------|------|-----------|
-| code | string | Código do cupom (ex: PROMO10) |
-| amount | number | Valor subtotal em Kz (ex: 25000) |
-
-**Response 200 (válido):**
-```json
-{
-  "valid": true,
-  "discount_amount": 2500,
-  "type": "percentage",
-  "value": 10
-}
-```
-
-**Response 200 (inválido):**
-```json
-{
-  "valid": false,
-  "message": "Cupom inválido ou expirado."
-}
-```
-
-**Nota:** Endpoint opcional. Se não existir, o frontend envia `coupon_code` no POST /orders e o backend valida na criação do pedido. Em caso de cupom inválido, o backend retorna 422 com mensagem apropriada.
 
 ---
 
@@ -1238,9 +1297,10 @@ const qrSrc = gatewayResponse.QRCode?.startsWith('data:')
 - Imagem do QR Code (decodificar base64).
 - Mensagem: "Escaneie com a app E-Kwanza para pagar."
 - Mostrar `ExpirationDate` formatada (ex.: "Válido até 20/02/2025 10:15").
-- O status é atualizado automaticamente via webhook quando o cliente pagar, cancelar ou o ticket expirar.
+- O status é atualizado automaticamente via webhook (ver secção 4.4.2) quando o cliente pagar, cancelar ou o ticket expirar.
+- Como rede de segurança, o `ReconcilePayments` consulta periodicamente o estado do ticket via `GET /Ticket/{token}/{code}` (ver secção 4.4.3).
 
-### 4.3. Estados do pagamento (`payment.status`)
+### 4.3. Estados do pagamento (`payment.status`) e State Machine
 
 | Status | Significado |
 |--------|-------------|
@@ -1250,6 +1310,26 @@ const qrSrc = gatewayResponse.QRCode?.startsWith('data:')
 | `failed` | Falhou ou recusado |
 | `cancelled` | Cancelado pelo cliente |
 | `expired` | Expirado (ex.: QR ticket) |
+| `refunded` | Reembolsado |
+
+**State Machine (transições permitidas):**
+
+A API impõe uma state machine rigorosa — transições ilegais são ignoradas e registadas em log:
+
+```
+pending    → processing | failed | cancelled | expired
+processing → paid | failed | cancelled
+paid       → refunded
+failed     → (terminal)
+cancelled  → (terminal)
+expired    → (terminal)
+refunded   → (terminal)
+```
+
+Configuração centralizada em `config/payments.php`. Exemplos de transições **bloqueadas**:
+- `failed → paid` (um pagamento falhado não pode ser marcado como pago)
+- `paid → failed` (um pagamento pago só pode ser reembolsado)
+- `cancelled → processing` (um pagamento cancelado é final)
 
 ### 4.4. Atualização de status (webhooks)
 
@@ -1286,12 +1366,75 @@ Documentação oficial: [Merchant Webhooks](https://appypay.stoplight.io/docs/ap
 5. Solicitar/confirmar com a AppyPay a lista oficial de IPs de origem dos webhooks e configurá-los em `APPYPAY_WEBHOOK_ALLOWED_IPS`.
 6. Guardar/ativar o webhook.
 
-Quando um pagamento muda de estado no AppyPay, o webhook é recebido, colocado na fila (`ProcessWebhookPayload`) e:
-- Atualiza o `payment.status` e, se pago, o `payment.paid_at`.
-- Se o pagamento estiver ligado a um `order`, atualiza o `order.status` para `paid` e define `order.paid_at`.
-- Regista um `PaymentLog` com o payload recebido (auditoria).
+Quando um pagamento muda de estado no AppyPay, o webhook é recebido e processado com as seguintes camadas de segurança:
 
-Do ponto de vista do frontend, nada muda: continua a consultar o estado via endpoints (`GET /payments/{id}`, `GET /orders`) e vê os estados já atualizados pelo webhook.
+1. **IP Whitelist** — middleware `WebhookIpWhitelist` valida o IP de origem (em `local`, aceita qualquer IP).
+2. **Replay Protection** — a API calcula um SHA-256 hash do payload. Se já existe um `PaymentLog` com o mesmo hash, o webhook é ignorado (protecção contra retries e ataques de replay).
+3. **Audit Log imediato** — um `PaymentLog` com `event_type = 'webhook_received'` é criado **antes** de despachar o job (garante rastreabilidade mesmo que a queue falhe).
+4. **State Machine** — se a transição for ilegal (ex: `failed → paid`), é bloqueada e registada como `illegal_transition`.
+5. **Actualização** — atualiza `payment.status`, `payment.paid_at`, e propaga para `order.status` e `order.paid_at` se aplicável.
+6. **Cupom** — se o pagamento está ligado a uma order com cupom e o estado muda para `paid`, incrementa `coupon.used_count`.
+
+**PaymentLog (audit trail):** Cada webhook gera pelo menos 2 registos:
+- `webhook_received` — criado no controller antes do dispatch (com `payload_hash` para deduplicação)
+- `webhook_processed` — criado no job com `previous_state`, `new_state`, `status`, `processed_at`
+
+Se o pagamento não é encontrado, o log é marcado como `webhook_received:unmatched`. Se está em estado terminal, `webhook_received:ignored_terminal`.
+
+#### 4.4.2. Webhook E-Kwanza Ticket — como funciona
+
+- **Endpoint da Feerie Pay para receber callbacks E-Kwanza:**
+  - URL: `POST {DOMINIO_API}/api/v1/webhooks/ekwanza/ticket`
+  - Exemplo: `https://api.exemplo.com/api/v1/webhooks/ekwanza/ticket`
+- **Autenticação / segurança:**
+  - Validação por **HMAC-SHA256** via header `x-signature`.
+  - Campos usados para gerar a assinatura (concatenados nesta ordem): `code` + `operationCode` + nº de registo da empresa + token de notificação, cifrados com a API Key do comerciante.
+  - Configuração no `.env`: `EKWANZA_API_KEY`, `EKWANZA_COMPANY_REGISTER`, `EKWANZA_NOTIFICATION_TOKEN`.
+- **Payload recebido no callback:**
+  ```json
+  {
+    "code": "TICKET_CODE_123",
+    "operationCode": "REF_CODE",
+    "status": "1",
+    "amount": 5000.00
+  }
+  ```
+- **Chave de correlação:** O backend procura o pagamento por `code`:
+  - `Payment::where('gateway_code', payload.code)`
+- **Mapeamento de estado (campo `status` do E-Kwanza → `payment.status`):**
+  - `"0"` → `processing` (pendente no E-Kwanza)
+  - `"1"` → `paid` (processado / pago)
+  - `"2"` → `expired` (expirado)
+  - `"3"` → `cancelled` (cancelado)
+- **Resposta esperada pelo E-Kwanza:**
+  - `{"status": "0"}` — informação actualizada com sucesso
+  - `{"status": "1"}` — informação não actualizada (o E-Kwanza pode reenviar)
+
+**Consulta de estado (usado internamente pela reconciliação):**
+- Endpoint E-Kwanza: `GET /Ticket/{notificationToken}/{ticketCode}`
+- Retorna: `{ Amount, Code, CreationDate, ExpirationDate, Status }`
+- Estados: `0` = Pendente, `1` = Processado (pago), `2` = Expirado, `3` = Cancelado
+
+### 4.4.3. Reconciliação automática e expiração
+
+A API executa dois processos automáticos via scheduler:
+
+**ReconcilePayments** (a cada 10 minutos):
+
+Verifica o estado real no gateway para pagamentos `pending` ou `processing`:
+
+| Gateway | Endpoint consultado | Chave usada |
+|---------|---------------------|-------------|
+| **GPO / REF** (AppyPay) | `GET /v2.0/charges/{gateway_transaction_id}` | OAuth Bearer token |
+| **E-Kwanza Ticket** | `GET /Ticket/{token}/{gateway_code}` | Token de notificação |
+
+Se o estado no gateway diverge do estado local, actualiza (respeitando a state machine). Rede de segurança para webhooks perdidos ou atrasados.
+
+**ExpireStalePayments** (a cada 30 minutos):
+- Marca como `expired` pagamentos `pending` há mais de 30 minutos ou com `expires_at` ultrapassado.
+- Actualiza o `order.status` correspondente.
+
+Do ponto de vista do frontend, nada muda: continua a consultar o estado via endpoints (`GET /payments/{id}`, `GET /orders`) e vê os estados já atualizados.
 
 ### 4.5. Mapeamento: o que exibir no frontend por método
 
@@ -1301,7 +1444,7 @@ O frontend deve usar **sempre os campos do objeto `payment`** (ou `order.payment
 |--------|--------------------------|---------------------|
 | **GPO** | Mensagem fixa: "Aguardando aprovação no Multicaixa Express" | `payment.status`, `payment.amount`, `payment.currency` |
 | **REF** | `payment.gateway_reference` (ex: "10111 180162314") | `payment.expires_at`, `payment.raw_response.responseStatus.reference` |
-| **Ticket** | `payment.raw_response.QRCode` (ou `gateway_response.QRCode` na criação) | `payment.expires_at`, `payment.raw_response.ExpirationDate` |
+| **Ticket** | `payment.qr_code` (em GET /payments/{id}) ou `gateway_response.QRCode` (na criação) | `payment.expires_at` |
 
 **Lista de pedidos (GET /orders):** Cada `order.payments[]` inclui `gateway_reference`, `expires_at`, `raw_response`, `gateway`, `status`, etc. Use-os para montar a UI de cada transação (ex: badge com referência, data de validade, QR se disponível em raw_response).
 
@@ -1311,11 +1454,11 @@ O frontend deve usar **sempre os campos do objeto `payment`** (ou `order.payment
 |-------|------|
 | 1 | Validar `payment_method` e campos obrigatórios (`phone_number` para GPO, `mobile_number` para Ticket) |
 | 2 | Enviar POST `/orders` (ou POST `/payments` para link standalone) com os dados |
-| 3 | Em caso de sucesso (201): ler `payment` e `gateway_response` conforme o `payment_method` |
+| 3 | Em caso de sucesso (201 novo, 200 existente): ler `payment` e `gateway_response` conforme o `payment_method` |
 | 4 | **GPO:** Mostrar mensagem de aguardar aprovação no Multicaixa |
 | 5 | **REF:** Mostrar `payment.gateway_reference` e `payment.expires_at` para pagamento em ATM |
-| 6 | **Ticket:** Renderizar QR com `payment.raw_response.QRCode` (ou `gateway_response.QRCode`) e exibir `payment.expires_at` |
-| 7 | Em GET /orders: usar todos os campos de `order`, `customer`, `product` e `payments` para exibir a lista completa |
+| 6 | **Ticket:** Na criação, renderizar QR com `gateway_response.QRCode`. Em polling (`GET /payments/{id}`), usar `payment.qr_code`. Exibir `payment.expires_at` |
+| 7 | Em GET /orders: usar todos os campos de `order`, `customer`, `product`, `coupon` e `payments` para exibir a lista completa |
 | 8 | Para obter atualizações: polling (quando endpoint existir) ou recarregar página |
 
 ### 4.7. Erros comuns nos gateways
@@ -1392,6 +1535,7 @@ Todos os IDs principais (Order, Product, User, Customer, Payment) usam **ULID** 
 | POST /payments | ✓ | — | — | — |
 | GET /payments/{id} | ✓ | — | — | — |
 | **GET /orders** (Pedidos) | — | ✓ | — | — |
+| **GET /payments** (Transações) | — | ✓ | — | — |
 | GET /products | — | ✓ | ✓ | ✓ |
 | GET /products/{id} | — | ✓ | ✓ | ✓ |
 | GET /products/{id}/download | — | ✓ | ✓ | ✓ |
@@ -1408,6 +1552,12 @@ Todos os IDs principais (Order, Product, User, Customer, Payment) usam **ULID** 
 | **POST /customers** | — | ✓ | — | — |
 | **PUT/PATCH /customers/{id}** | — | ✓ | — | — |
 | **DELETE /customers/{id}** | — | ✓ | — | — |
+| GET /payment-links | — | ✓ | ✓ | ✓ |
+| GET /payment-links/{id} | — | ✓ | ✓ | ✓ |
+| **POST /payment-links** | — | ✓ | ✓ | — |
+| **PUT/PATCH /payment-links/{id}** | — | ✓ | ✓ | — |
+| **DELETE /payment-links/{id}** | — | ✓ | ✓ | — |
+| GET /pay/{slug} | ✓ | ✓ | ✓ | ✓ |
 | **POST /users** | — | ✓ | — | — |
 | **PUT/PATCH /users/{id}** | — | ✓ | — | — |
 | **DELETE /users/{id}** | — | ✓ | — | — |
@@ -1433,7 +1583,7 @@ Todos os IDs principais (Order, Product, User, Customer, Payment) usam **ULID** 
 5. **401** → Redirecionar para login (o cookie foi invalidado ou expirou).
 6. **403** → Mostrar mensagem de falta de permissão.
 7. **Criar pedido** → Usar `payment_method` (gpo, ref, ekwanza_ticket), `phone_number` (GPO) e `mobile_number` (Ticket) conforme secção 4. Exibir QR (Ticket), referência (REF) ou mensagem de aprovação (GPO) conforme `payment` e `gateway_response` — ver mapeamento em 4.5.
-8. **Listagem de pedidos (GET /orders)** → Usar **todos** os campos de `order`, `customer`, `product` e `order.payments[]` (incluindo `gateway_reference`, `raw_response`, `expires_at`, etc.) para exibir referências, QR codes e estados.
+8. **Listagem de pedidos (GET /orders)** → Usar **todos** os campos de `order`, `customer`, `product`, `coupon` e `order.payments[]` (incluindo `gateway_reference`, `expires_at`, etc.) para exibir referências e estados. O campo `coupon` mostra o cupom aplicado (se houver).
 9. **Produtos com ficheiro** → Para download, usar endpoint com credenciais e tratar resposta como blob/ficheiro.
 
 ---
@@ -1444,6 +1594,43 @@ A API tem `supports_credentials: true` ativado. O frontend deve estar em `allowe
 
 ---
 
-**Última atualização:** fevereiro 2025 — Gateways E-Kwanza (GPO, REF, e-Kwanza Ticket) documentados. Estrutura completa de Order, Payment e mapeamento frontend atualizada.
+**Última atualização:** março 2026
 
-**Próximos passos (planeados):** Checkout completo e links de pagamento (já existe POST /payments standalone).
+**Histórico de alterações recentes:**
+
+**Fase 1 — Funcionalidades base:**
+- State Machine de pagamentos implementada (`config/payments.php`). Transições ilegais são bloqueadas e logadas.
+- Valores monetários (amounts) corrigidos: gateways recebem o valor decimal exato (ex: 100.55 AOA), sem arredondamento. Aritmética interna usa `bcmath` para precisão em descontos e totais.
+- CRUD de cupons implementado (admin/editor).
+- Webhooks AppyPay documentados com mapeamento de `operationStatus` e `responseStatus.successful`.
+
+**Fase 2 — Auditoria e robustez (melhorias #3 a #12):**
+- **#3 PaymentLog antes do dispatch** — webhooks são registados na base de dados (`webhook_received`) antes de ser despachados para a queue, garantindo rastreabilidade total.
+- **#4 Índices UNIQUE** — `gateway_transaction_id` (composto com `gateway`) e `gateway_code` agora têm índices UNIQUE, prevenindo duplicados a nível de base de dados.
+- **#5 Replay protection** — webhooks duplicados (retries do gateway ou ataques de replay) são detectados por hash SHA-256 do payload e ignorados silenciosamente.
+- **#6 Rate limiting** — todas as rotas públicas têm rate limiting: 10 req/min para criação de pedidos/pagamentos, 30 req/min para polling, 3 req/min para login e password reset.
+- **#7 PaymentLog schema completo** — campos `order_id`, `previous_state`, `new_state`, `status`, `notes`, `processed_at` adicionados para audit trail rico.
+- **#8 Reconciliação e expiração automáticas** — `ReconcilePayments` (a cada 10 min) consulta a API AppyPay e E-Kwanza para detectar webhooks perdidos; `ExpireStalePayments` (a cada 30 min) expira pagamentos pendentes expirados.
+- **#9 Protecção contra pedidos duplicados** — se um cliente já tem um pedido `pending` para o mesmo produto, a API retorna o existente (HTTP 200) em vez de criar duplicados.
+- **#10 WebhookController sem lógica de negócio** — controller não faz queries à tabela `payments`; toda a resolução é feita no job.
+- **#11 GET /orders carrega relação coupon** — o endpoint agora inclui o cupom associado a cada pedido.
+- **#12 GET /payments/{id} não expõe raw_response** — campos internos (`raw_response`, `payload`) são ocultos no endpoint público; para tickets E-Kwanza, o QR code é exposto como `qr_code`.
+
+**Fase 3 — Integração E-Kwanza completa:**
+- Webhook E-Kwanza Ticket documentado (secção 4.4.2) com validação HMAC-SHA256 (`x-signature`), mapeamento de `status` (`"0"`→processing, `"1"`→paid, `"2"`→expired, `"3"`→cancelled), e endpoint `POST /api/v1/webhooks/ekwanza/ticket`.
+- Consulta de estado E-Kwanza adicionada ao `EkwanzaTicketService::checkStatus()` — `GET /Ticket/{token}/{code}`.
+- Reconciliação (`ReconcilePayments`) agora suporta **ambos os gateways**: AppyPay (por `gateway_transaction_id`) e E-Kwanza (por `gateway_code`).
+- Mapeamento de status do callback E-Kwanza corrigido: `status "0"` agora mapeia para `processing` (antes era `failed`).
+**Fase 4 — Melhorias adicionais e Payment Links:**
+- Listener `PaymentStatusChanged` registado — cada mudança de estado de pagamento é registada em log estruturado (audit trail interno, sem impacto direto no frontend).
+- Rota de cancelamento de pedidos `PATCH /orders/{order}/cancel` adicionada (apenas admin). Cancela o pedido e marca pagamentos pendentes/processing como `cancelled`.
+- `markAsRefunded()` implementado no modelo `Payment`, com propagação para `Order` (`status=refunded`), respeitando a state machine.
+- Migrações corrigidas para rollback seguro (`orders_items`, `customers`) e remoção da tabela redundante `webhook_logs` (consolidado em `payment_logs`).
+- Endpoint **GET /payments** (admin) adicionado para listagem de todas as transações, com filtros por `status` e `gateway`.
+- Sistema de **Payment Links** implementado:
+  - Modelo `PaymentLink` com slug público, valor fixo ou variável, limites e métodos permitidos.
+  - CRUD autenticado em `/payment-links` (admin/editor) para gestão de links.
+  - Rota pública `GET /pay/{slug}` para o frontend montar a página de checkout a partir de um link partilhável.
+  - Pagamentos criados via Payment Links continuam a usar `POST /payments` e `GET /payments/{id}` para polling, mantendo o mesmo fluxo do frontend.
+
+**Próximos passos (planeados):** Focar no checkout completo no frontend (incluindo fluxo visual para Payment Links) e eventuais integrações de notificação em tempo real (WebSockets) com base no evento `PaymentStatusChanged`.
