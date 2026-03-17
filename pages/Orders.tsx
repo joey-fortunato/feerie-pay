@@ -482,22 +482,27 @@ export const Orders: React.FC = () => {
                     {selectedOrder.payments.map((p, idx) => (
                       <div key={p.id} className="relative pl-6">
                         <div className={`absolute -left-[9px] top-1.5 w-4 h-4 rounded-full border-2 border-white shadow-sm ${
-                          p.status === 'failed' ? 'bg-red-500' :
-                          p.status === 'paid' ? 'bg-green-500' : 'bg-brand-primary'
+                          p.status === 'paid' ? 'bg-green-500' :
+                          p.status === 'failed' || p.status === 'expired' ? 'bg-red-500' :
+                          p.status === 'cancelled' ? 'bg-gray-400' :
+                          p.status === 'refunded' ? 'bg-orange-500' : 'bg-brand-primary'
                         }`} />
                         <p className="text-xs text-gray-400 mb-0.5">{formatDateTime(p.createdAt)}</p>
                         <p className="text-sm font-medium text-dark-text">
-                          {p.gateway === 'gpo'
-                            ? 'Multicaixa Express'
-                            : p.gateway === 'ref'
-                            ? 'Referência Multicaixa'
-                            : p.gateway === 'ekwanza_ticket' || p.gateway === 'ekwanza' || p.gateway === 'appypay'
-                            ? 'Ekwanza'
-                            : p.gateway}{' '}
+                          {(() => {
+                            const hasRef = !!(p.gatewayReference || p.gatewayCode);
+                            if (p.gateway === 'gpo') return 'Multicaixa Express';
+                            if (p.gateway === 'ref') return 'Referência Multicaixa';
+                            if (p.gateway === 'appypay') {
+                              return hasRef ? 'Referência Multicaixa' : 'Multicaixa Express';
+                            }
+                            if (p.gateway === 'ekwanza_ticket' || p.gateway === 'ekwanza') return 'Ekwanza';
+                            return p.gateway;
+                          })()}{' '}
                           — Kz {parseFloat(p.amount || '0').toLocaleString()}
                         </p>
                         <p className="text-xs text-gray-500">
-                          {p.status === 'paid' ? 'Pago' : p.status === 'failed' ? 'Falhou' : 'Pendente'}
+                          {p.status === 'paid' ? 'Pago' : p.status === 'failed' || p.status === 'expired' ? 'Falhou' : p.status === 'cancelled' ? 'Cancelado' : p.status === 'refunded' ? 'Reembolsado' : 'Pendente'}
                         </p>
                         {p.gateway === 'ref' && (
                           (() => {

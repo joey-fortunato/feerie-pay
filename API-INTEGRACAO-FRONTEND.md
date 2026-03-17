@@ -497,6 +497,98 @@ No backend existe o modelo `PaymentLink`, mas o frontend interage principalmente
     - `payment_method` permitido (`gpo`, `ref` ou `ekwanza_ticket`)
     - Campos adicionais (`phone_number` ou `mobile_number`) conforme o método
 
+#### POST `/payment-links` 🔒 — Criar Payment Link (backoffice)
+
+Endpoint usado pelo **backoffice (admin/editor)** para criar um Payment Link que depois será partilhado com o cliente.
+
+**Request (JSON):**
+
+```json
+{
+  "title": "Consultoria 1h",
+  "description": "Sessão de consultoria Feerie de 1 hora",
+  "amount": 15000,
+  "currency": "AOA",
+  "allow_custom_amount": false,
+  "min_amount": null,
+  "max_amount": null,
+  "is_active": true,
+  "expires_at": null,
+  "max_uses": null,
+  "allowed_methods": ["gpo", "ref", "ekwanza_ticket"]
+}
+```
+
+Campos mínimos para o fluxo atual do frontend:
+
+- **Obrigatórios no fluxo actual do front:**
+  - `title` — texto digitado no campo **“Nome do Serviço/Produto”**
+  - `amount` — número em Kz, vindo do input **“Valor a cobrar (Kz)”**
+- **Opcionais:** `description`, `currency`, `allow_custom_amount`, `min_amount`, `max_amount`, `is_active`, `expires_at`, `max_uses`, `allowed_methods`
+
+**Comportamento importante (slug e URL pública):**
+
+- O backend **gera automaticamente o `slug` a partir do `title`** quando ele não é enviado:
+  - Exemplo: `title = "Consultoria 1h"` → `slug = "consultoria-1h"`
+  - Se já existir um link com o mesmo slug, são geradas variantes com sufixo: `consultoria-1h-1`, `consultoria-1h-2`, etc.
+- O backend também calcula a **URL pública pronta para uso**:
+  - `public_url = {APP_FRONTEND_URL}/pay/{slug}`
+
+**Response 201:**
+
+```json
+{
+  "payment_link": {
+    "id": "01HXYZ1234567890ABCDEFGHIJ",
+    "slug": "consultoria-1h",
+    "title": "Consultoria 1h",
+    "description": "Sessão de consultoria Feerie de 1 hora",
+    "amount": "15000.00",
+    "currency": "AOA",
+    "allow_custom_amount": false,
+    "min_amount": null,
+    "max_amount": null,
+    "is_active": true,
+    "expires_at": null,
+    "max_uses": null,
+    "current_uses": 0,
+    "allowed_methods": ["gpo", "ref", "ekwanza_ticket"],
+    "created_by": "01HUSERULID1234567890ABCD",
+    "created_at": "2025-02-20T10:00:00.000000Z",
+    "updated_at": "2025-02-20T10:00:00.000000Z"
+  },
+  "public_url": "https://app.exemplo.com/pay/consultoria-1h"
+}
+```
+
+**Regra de ouro para o frontend (muito importante):**
+
+- **Nunca** construir a URL manualmente com `id` ou com um slug “inventado”.
+- **Sempre** usar **exactamente** o que o backend devolve:
+  - Campo `payment_link.slug` se o front quiser montar `"/pay/" + slug`
+  - Ou directamente o campo `public_url` retornado no JSON (recomendado).
+
+Exemplo de uso no frontend ao clicar em “Criar Link”:
+
+```javascript
+// corpo enviado pelo frontend
+const res = await api.post('/payment-links', {
+  title: newLinkTitle,        // "Consultoria 1h"
+  amount: amountNum           // 15000
+});
+
+// resposta da API (res.data)
+const { payment_link, public_url } = res.data;
+
+// Forma recomendada: usar diretamente a URL pública devolvida
+console.log(public_url); // "https://app.exemplo.com/pay/consultoria-1h"
+
+// Se precisar apenas do slug:
+console.log(payment_link.slug); // "consultoria-1h"
+```
+
+Assim, **o backend é o único responsável por gerar e garantir a unicidade do slug**, e o frontend apenas consome `public_url`/`slug` sem aplicar regras próprias.
+
 #### GET `/pay/{slug}` (público) — Resolver Payment Link
 
 Retorna os dados de um Payment Link público. Usado para montar a página de checkout a partir de um link partilhável.

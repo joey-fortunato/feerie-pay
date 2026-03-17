@@ -1,48 +1,69 @@
 
-import React, { useState } from 'react';
-import { Plus, Shield, Mail, Trash2, Check, X, ShieldCheck, User, Eye, AlertCircle, Edit3, Save } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Plus, Shield, Mail, Trash2, Check, X, ShieldCheck, User, Eye, AlertCircle, Edit3, Save, Loader2 } from 'lucide-react';
 import { TeamMember } from '../types';
-
-const initialTeam: TeamMember[] = [
-  {
-    id: 'USR-001',
-    name: 'João Manuel',
-    email: 'joao.admin@loja.ao',
-    role: 'admin',
-    status: 'active',
-    addedAt: '01 Jan, 2023',
-    avatar: 'JM'
-  },
-  {
-    id: 'USR-002',
-    name: 'Ana Sofia',
-    email: 'ana.suporte@loja.ao',
-    role: 'editor',
-    status: 'active',
-    addedAt: '15 Mar, 2023',
-    avatar: 'AS'
-  },
-  {
-    id: 'USR-003',
-    name: 'Carlos Pedro',
-    email: 'carlos.pedro@gmail.com',
-    role: 'viewer',
-    status: 'pending',
-    addedAt: 'Hoje',
-    avatar: 'CP'
-  }
-];
+import type { ApiUser } from '../api/types';
+import { usersApi } from '../services/usersApi';
+import { ApiError, getFriendlyErrorMessage } from '../services/api';
+import { useToast } from '../contexts/ToastContext';
 
 export const Team: React.FC = () => {
-  const [team, setTeam] = useState<TeamMember[]>(initialTeam);
+  const toast = useToast();
+  const [team, setTeam] = useState<TeamMember[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingMember, setEditingMember] = useState<TeamMember | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   
   const [formData, setFormData] = useState({
     name: '',
     email: '',
     role: 'viewer' as 'admin' | 'editor' | 'viewer'
   });
+  const [isSaving, setIsSaving] = useState(false);
+  const [isDeletingId, setIsDeletingId] = useState<string | null>(null);
+
+  const mapApiUserToTeamMember = (user: ApiUser): TeamMember => {
+    const avatar = user.name
+      .split(' ')
+      .map((n) => n[0])
+      .slice(0, 2)
+      .join('')
+      .toUpperCase();
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      status: 'active',
+      addedAt: '',
+      avatar,
+    };
+  };
+
+  useEffect(() => {
+    const fetchUsers = async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const res = await usersApi.list(1, 100);
+        const data = Array.isArray(res?.data) ? res.data : [];
+        setTeam(data.map(mapApiUserToTeamMember));
+      } catch (err) {
+        const msg = getFriendlyErrorMessage(
+          err instanceof ApiError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : 'Erro ao carregar usuários.'
+        );
+        setError(msg);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    fetchUsers();
+  }, []);
 
   const openInviteModal = () => {
     setEditingMember(null);
@@ -60,42 +81,66 @@ export const Team: React.FC = () => {
     setIsModalOpen(true);
   };
 
-  const handleSave = () => {
-    if (!formData.name || !formData.email) return;
-
-    if (editingMember) {
-      // Update existing member
-      setTeam(team.map(member => 
-        member.id === editingMember.id 
-          ? { 
-              ...member, 
-              ...formData, 
-              avatar: formData.name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase() 
-            } 
-          : member
-      ));
-    } else {
-      // Create new member
-      const newMember: TeamMember = {
-        id: `USR-${Math.floor(Math.random() * 10000)}`,
-        name: formData.name,
-        email: formData.email,
-        role: formData.role,
-        status: 'pending',
-        addedAt: 'Agora',
-        avatar: formData.name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase()
-      };
-      setTeam([...team, newMember]);
+  const handleSave = async () => {
+    if (!formData.name.trim() || !formData.email.trim()) return;
+    setIsSaving(true);
+    try {
+      if (editingMember) {
+        const updated = await usersApi.update(editingMember.id, {
+          name: formData.name.trim(),
+          email: formData.email.trim(),
+          role: formData.role,
+        });
+        setTeam((prev) =>
+          prev.map((member) =>
+            member.id === editingMember.id ? mapApiUserToTeamMember(updated) : member
+          )
+        );
+        toast.success('Usuário atualizado com sucesso.');
+      } else {
+        const created = await usersApi.create({
+          name: formData.name.trim(),
+          email: formData.email.trim(),
+          role: formData.role,
+        });
+        setTeam((prev) => [...prev, mapApiUserToTeamMember(created as ApiUser)]);
+        toast.success('Usuário criado com sucesso.');
+      }
+      setIsModalOpen(false);
+      setEditingMember(null);
+      setFormData({ name: '', email: '', role: 'viewer' });
+    } catch (err) {
+      const msg = getFriendlyErrorMessage(
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Erro ao guardar usuário.'
+      );
+      toast.error(msg);
+    } finally {
+      setIsSaving(false);
     }
-
-    setIsModalOpen(false);
-    setEditingMember(null);
-    setFormData({ name: '', email: '', role: 'viewer' });
   };
 
-  const handleRemove = (id: string) => {
-    if (confirm('Tem certeza que deseja remover o acesso deste usuário?')) {
-      setTeam(team.filter(m => m.id !== id));
+  const handleRemove = async (id: string) => {
+    if (!confirm('Tem certeza que deseja remover o acesso deste usuário?')) return;
+    setIsDeletingId(id);
+    try {
+      await usersApi.delete(id);
+      setTeam((prev) => prev.filter((m) => m.id !== id));
+      toast.success('Usuário removido com sucesso.');
+    } catch (err) {
+      const msg = getFriendlyErrorMessage(
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Erro ao remover usuário.'
+      );
+      toast.error(msg);
+    } finally {
+      setIsDeletingId(null);
     }
   };
 
@@ -114,7 +159,12 @@ export const Team: React.FC = () => {
 
   return (
     <div className="p-6 lg:p-10 max-w-7xl mx-auto space-y-8 relative">
-      
+      {error && (
+        <div className="mb-4 flex items-center gap-2 p-3 bg-red-50 border border-red-100 rounded-xl text-red-700 text-sm">
+          <AlertCircle size={16} />
+          <span>{error}</span>
+        </div>
+      )}
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -134,7 +184,23 @@ export const Team: React.FC = () => {
         
         {/* Members List */}
         <div className="lg:col-span-2 space-y-6">
-          {team.map((member) => (
+          {isLoading ? (
+            <div className="bg-white p-10 rounded-2xl shadow-soft border border-gray-50 flex flex-col items-center justify-center text-gray-500 gap-3">
+              <Loader2 size={32} className="animate-spin" />
+              <p>A carregar usuários...</p>
+            </div>
+          ) : team.length === 0 ? (
+            <div className="bg-white p-10 rounded-2xl shadow-soft border border-gray-50 flex flex-col items-center justify-center text-center gap-3">
+              <div className="w-12 h-12 rounded-full bg-gray-50 flex items-center justify-center">
+                <User size={22} className="text-gray-400" />
+              </div>
+              <h3 className="text-sm font-semibold text-dark-text">Nenhum membro encontrado</h3>
+              <p className="text-xs text-gray-500 max-w-xs">
+                Convide o primeiro membro da sua equipe para ajudar a gerir a conta.
+              </p>
+            </div>
+          ) : (
+          team.map((member) => (
             <div key={member.id} className="bg-white p-6 rounded-2xl shadow-soft border border-gray-50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 group">
               
               <div className="flex items-center gap-4">
@@ -168,17 +234,18 @@ export const Team: React.FC = () => {
                   {member.role !== 'admin' && (
                     <button 
                       onClick={() => handleRemove(member.id)}
-                      className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                      className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
+                      disabled={isDeletingId === member.id}
                       title="Remover Acesso"
                     >
-                      <Trash2 size={18} />
+                      {isDeletingId === member.id ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={18} />}
                     </button>
                   )}
                 </div>
               </div>
 
             </div>
-          ))}
+          )))}
         </div>
 
         {/* Info Sidebar */}
@@ -300,10 +367,20 @@ export const Team: React.FC = () => {
                 </button>
                 <button 
                   onClick={handleSave}
-                  className="px-6 py-2 bg-brand-primary text-white font-bold rounded-lg hover:bg-brand-hover shadow-md shadow-indigo-200 flex items-center gap-2"
+                  disabled={isSaving || !formData.name.trim() || !formData.email.trim()}
+                  className="px-6 py-2 bg-brand-primary text-white font-bold rounded-lg hover:bg-brand-hover shadow-md shadow-indigo-200 flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  {editingMember ? <Save size={18} /> : <Mail size={18} />}
-                  {editingMember ? 'Salvar Alterações' : 'Enviar Convite'}
+                  {isSaving ? (
+                    <>
+                      <Loader2 size={18} className="animate-spin" />
+                      Salvando...
+                    </>
+                  ) : (
+                    <>
+                      {editingMember ? <Save size={18} /> : <Mail size={18} />}
+                      {editingMember ? 'Salvar Alterações' : 'Enviar Convite'}
+                    </>
+                  )}
                 </button>
              </div>
 

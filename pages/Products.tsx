@@ -237,8 +237,10 @@ export const Products: React.FC = () => {
   };
 
   const handleCopyLink = (id: string) => {
-    const mockUrl = `https://feerie.pay/checkout/${id.toLowerCase()}`;
-    navigator.clipboard.writeText(mockUrl);
+    const baseUrl =
+      (import.meta as any).env?.VITE_CHECKOUT_BASE_URL || window.location.origin;
+    const url = `${baseUrl.replace(/\/$/, '')}/checkout/${id}`;
+    navigator.clipboard.writeText(url);
     setCopiedId(id);
     toast.success('Link copiado para a área de transferência.');
     setTimeout(() => setCopiedId(null), 2000);

@@ -1,80 +1,179 @@
 
-import React, { useState } from 'react';
-import { Plus, Copy, ExternalLink, MoreHorizontal, Trash2, Eye, ShoppingBag, Check, X, Link as LinkIcon } from 'lucide-react';
-import { PaymentLink } from '../types';
-
-const initialLinks: PaymentLink[] = [
-  {
-    id: 'LNK-9921',
-    title: 'Consultoria Rápida',
-    amount: 15000,
-    url: 'https://feerie.pay/p/consultoria-rapida',
-    active: true,
-    views: 142,
-    sales: 8,
-    createdAt: '10 Out, 2023'
-  },
-  {
-    id: 'LNK-9922',
-    title: 'Promoção Ebook',
-    amount: 5000,
-    url: 'https://feerie.pay/p/promo-ebook-24h',
-    active: true,
-    views: 850,
-    sales: 45,
-    createdAt: '12 Out, 2023'
-  },
-  {
-    id: 'LNK-9923',
-    title: 'Aula Particular (Inglês)',
-    amount: 7000,
-    url: 'https://feerie.pay/p/aula-ingles',
-    active: false,
-    views: 20,
-    sales: 2,
-    createdAt: '01 Set, 2023'
-  }
-];
+import React, { useEffect, useState } from 'react';
+import { Plus, Copy, ExternalLink, MoreHorizontal, Trash2, Eye, ShoppingBag, Check, X, Link as LinkIcon, Loader2 } from 'lucide-react';
+import type { ApiPaymentLink } from '../services/paymentLinksApi';
+import { paymentLinksApi } from '../services/paymentLinksApi';
+import { useToast } from '../contexts/ToastContext';
+import { ApiError, getFriendlyErrorMessage } from '../services/api';
+import { ConfirmModal } from '../components/ConfirmModal';
 
 export const PaymentLinks: React.FC = () => {
-  const [links, setLinks] = useState<PaymentLink[]>(initialLinks);
+  const toast = useToast();
+  const [links, setLinks] = useState<ApiPaymentLink[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   
   // New Link Form State
   const [newLinkTitle, setNewLinkTitle] = useState('');
   const [newLinkAmount, setNewLinkAmount] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<ApiPaymentLink | null>(null);
 
-  const handleCopy = (id: string, url: string) => {
-    navigator.clipboard.writeText(url);
-    setCopiedId(id);
+  useEffect(() => {
+    const fetchLinks = async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const res = await paymentLinksApi.list(1, 50);
+        const data = Array.isArray(res?.data) ? res.data : [];
+        setLinks(data);
+      } catch (err) {
+        const msg = getFriendlyErrorMessage(
+          err instanceof ApiError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : 'Erro ao carregar links de pagamento.'
+        );
+        setError(msg);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    void fetchLinks();
+  }, []);
+
+  const buildPublicUrl = (link: ApiPaymentLink): string => {
+    // 1) Prefer value devolvido diretamente pela API (url/public_url)
+    const candidate =
+      (link.url as string | undefined | null) ??
+      ((link as unknown as { public_url?: string | null }).public_url ?? undefined);
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+
+    // 2) Fallback: construir a partir de slug ou code, alinhado com as rotas do frontend
+    if (typeof window === 'undefined') return '';
+    const base = window.location.origin.replace(/\/$/, '');
+
+    const slug = (link as unknown as { slug?: string | null }).slug;
+    if (slug && slug.trim().length > 0) {
+      return `${base}/pay/${slug.trim()}`;
+    }
+
+    const code = (link as unknown as { code?: string | null }).code;
+    if (code && code.trim().length > 0) {
+      return `${base}/p/${code.trim()}`;
+    }
+
+    return '';
+  };
+
+  const handleCopy = (link: ApiPaymentLink) => {
+    const finalUrl = buildPublicUrl(link);
+    if (!finalUrl) {
+      toast.error('Não foi possível gerar o link público para este registro.');
+      return;
+    }
+    navigator.clipboard.writeText(finalUrl);
+    setCopiedId(link.id);
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const handleCreateLink = () => {
+  const handleCreateOrUpdateLink = async () => {
     if (!newLinkTitle || !newLinkAmount) return;
-
-    const newLink: PaymentLink = {
-      id: `LNK-${Math.floor(Math.random() * 10000)}`,
-      title: newLinkTitle,
-      amount: parseFloat(newLinkAmount),
-      url: `https://feerie.pay/p/${newLinkTitle.toLowerCase().replace(/\s+/g, '-')}`,
-      active: true,
-      views: 0,
-      sales: 0,
-      createdAt: new Date().toLocaleDateString('pt-AO', { day: '2-digit', month: 'short', year: 'numeric' }),
-    };
-
-    setLinks([newLink, ...links]);
-    setIsModalOpen(false);
-    setNewLinkTitle('');
-    setNewLinkAmount('');
+    setIsCreating(true);
+    try {
+      const amountNum = Number(newLinkAmount);
+      if (!Number.isFinite(amountNum) || amountNum <= 0) {
+        toast.error('Informe um valor válido para o link de pagamento.');
+        setIsCreating(false);
+        return;
+      }
+      if (editingId) {
+        const updated = await paymentLinksApi.update(editingId, {
+          title: newLinkTitle,
+          amount: amountNum,
+        });
+        setLinks((prev) =>
+          prev.map((link) => (link.id === editingId ? { ...link, ...updated } : link))
+        );
+        toast.success('Link de pagamento atualizado com sucesso.');
+      } else {
+        const created = await paymentLinksApi.create({ title: newLinkTitle, amount: amountNum });
+        setLinks((prev) => [created, ...prev]);
+        toast.success('Link de pagamento criado com sucesso.');
+      }
+      setIsModalOpen(false);
+      setNewLinkTitle('');
+      setNewLinkAmount('');
+      setEditingId(null);
+    } catch (err) {
+      const msg = getFriendlyErrorMessage(
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Erro ao criar link de pagamento.'
+      );
+      toast.error(msg);
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   const toggleStatus = (id: string) => {
-    setLinks(links.map(link => 
-      link.id === id ? { ...link, active: !link.active } : link
-    ));
+    // Por enquanto, apenas refletimos na UI; pode-se ligar a um endpoint PATCH futuramente.
+    setLinks((prev) =>
+      prev.map((link) =>
+        link.id === id ? { ...link, active: !link.active } : link
+      )
+    );
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!confirmDelete) return;
+    setDeletingId(confirmDelete.id);
+    try {
+      await paymentLinksApi.delete(confirmDelete.id);
+      setLinks((prev) => prev.filter((l) => l.id !== confirmDelete.id));
+      toast.success('Link de pagamento excluído com sucesso.');
+    } catch (err) {
+      const msg = getFriendlyErrorMessage(
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Erro ao excluir link de pagamento.'
+      );
+      toast.error(msg);
+    } finally {
+      setDeletingId(null);
+      setConfirmDelete(null);
+    }
+  };
+
+  const openCreateModal = () => {
+    setEditingId(null);
+    setNewLinkTitle('');
+    setNewLinkAmount('');
+    setIsModalOpen(true);
+  };
+
+  const openEditModal = (link: ApiPaymentLink) => {
+    setEditingId(link.id);
+    setNewLinkTitle(link.title ?? '');
+    setNewLinkAmount(
+      typeof link.amount === 'number' && Number.isFinite(link.amount)
+        ? String(link.amount)
+        : ''
+    );
+    setIsModalOpen(true);
   };
 
   return (
@@ -87,7 +186,7 @@ export const PaymentLinks: React.FC = () => {
           <p className="text-gray-500 text-sm">Crie links rápidos para vender nas redes sociais e WhatsApp.</p>
         </div>
         <button 
-          onClick={() => setIsModalOpen(true)}
+          onClick={openCreateModal}
           className="flex items-center gap-2 px-6 py-3 bg-brand-primary text-white rounded-xl text-sm font-bold hover:bg-brand-hover shadow-lg shadow-indigo-500/20 transition-all transform hover:-translate-y-0.5"
         >
           <Plus size={18} />
@@ -95,9 +194,45 @@ export const PaymentLinks: React.FC = () => {
         </button>
       </div>
 
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-xl flex items-center justify-between">
+          <span>{error}</span>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="text-xs font-semibold underline underline-offset-2"
+          >
+            Tentar novamente
+          </button>
+        </div>
+      )}
+
       {/* Links Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {links.map((link) => (
+        {isLoading ? (
+          <>
+            <div className="bg-white rounded-2xl p-6 shadow-soft border border-gray-100 flex flex-col gap-4">
+              <div className="flex justify-between items-start">
+                <div className="p-3 bg-gray-100 rounded-xl w-12 h-12 animate-pulse" />
+                <div className="w-8 h-8 rounded-lg bg-gray-100 animate-pulse" />
+              </div>
+              <div className="space-y-2">
+                <div className="h-4 bg-gray-100 rounded-md w-3/4 animate-pulse" />
+                <div className="h-6 bg-gray-100 rounded-md w-1/2 animate-pulse" />
+              </div>
+              <div className="h-10 bg-gray-50 border border-dashed border-gray-200 rounded-xl animate-pulse" />
+              <div className="flex items-center justify-between pt-4 border-t border-gray-100">
+                <div className="flex gap-4">
+                  <div className="w-12 h-3 bg-gray-100 rounded-full animate-pulse" />
+                  <div className="w-16 h-3 bg-gray-100 rounded-full animate-pulse" />
+                </div>
+                <div className="w-16 h-3 bg-gray-100 rounded-full animate-pulse" />
+              </div>
+            </div>
+            <div className="bg-white rounded-2xl p-6 shadow-soft border border-gray-100 hidden md:flex flex-col gap-4 animate-pulse" />
+          </>
+        ) : (
+        links.map((link) => (
           <div key={link.id} className={`bg-white rounded-2xl p-6 shadow-soft border transition-all duration-300 ${link.active ? 'border-gray-50 hover:border-brand-primary/30' : 'border-gray-100 opacity-75 bg-gray-50/50'}`}>
             
             {/* Card Header */}
@@ -105,19 +240,51 @@ export const PaymentLinks: React.FC = () => {
               <div className="p-3 bg-indigo-50 rounded-xl text-brand-primary">
                 <LinkIcon size={24} />
               </div>
-              <div className="relative group">
-                 <button className="p-2 text-gray-400 hover:bg-gray-100 rounded-lg transition-colors">
-                   <MoreHorizontal size={20} />
-                 </button>
-                 {/* Dropdown (Simulated) */}
-                 <div className="absolute right-0 top-full mt-2 w-32 bg-white shadow-xl rounded-xl border border-gray-100 overflow-hidden hidden group-hover:block z-10">
-                    <button onClick={() => toggleStatus(link.id)} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-600">
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setMenuOpenId((current) => (current === link.id ? null : link.id))
+                  }
+                  className="p-2 text-gray-400 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  <MoreHorizontal size={20} />
+                </button>
+                {menuOpenId === link.id && (
+                  <div className="absolute right-0 top-full mt-2 w-40 bg-white shadow-xl rounded-xl border border-gray-100 overflow-hidden z-10">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        toggleStatus(link.id);
+                        setMenuOpenId(null);
+                      }}
+                      className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-600"
+                    >
                       {link.active ? 'Desativar' : 'Ativar'}
                     </button>
-                    <button className="w-full text-left px-4 py-2 text-sm hover:bg-red-50 text-red-500 flex items-center gap-2">
-                      <Trash2 size={14} /> Excluir
+                    <button
+                      type="button"
+                      onClick={() => {
+                        openEditModal(link);
+                        setMenuOpenId(null);
+                      }}
+                      className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-600"
+                    >
+                      Editar
                     </button>
-                 </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuOpenId(null);
+                        setConfirmDelete(link);
+                      }}
+                      className="w-full text-left px-4 py-2 text-sm hover:bg-red-50 text-red-500 flex items-center gap-2"
+                    >
+                      <Trash2 size={14} />
+                      Excluir
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -129,11 +296,13 @@ export const PaymentLinks: React.FC = () => {
 
             {/* URL Copy Area */}
             <div className="bg-gray-50 rounded-xl p-1 flex items-center justify-between border border-gray-200 mb-6">
-               <div className="px-3 py-2 overflow-hidden">
-                  <p className="text-xs text-gray-500 truncate w-full font-mono">{link.url}</p>
-               </div>
+              <div className="px-3 py-2 overflow-hidden">
+                  <p className="text-xs text-gray-500 truncate w-full font-mono">
+                    {buildPublicUrl(link) || 'Link indisponível'}
+                  </p>
+              </div>
                <button 
-                 onClick={() => handleCopy(link.id, link.url)}
+                 onClick={() => handleCopy(link)}
                  className={`p-2 rounded-lg transition-all duration-200 flex-shrink-0 ${copiedId === link.id ? 'bg-green-500 text-white' : 'bg-white text-gray-500 hover:text-brand-primary shadow-sm'}`}
                  title="Copiar Link"
                >
@@ -146,11 +315,11 @@ export const PaymentLinks: React.FC = () => {
                <div className="flex gap-4">
                   <div className="flex items-center gap-1.5 text-xs text-gray-500">
                      <Eye size={14} />
-                     <span>{link.views}</span>
+                     <span>{link.views ?? 0}</span>
                   </div>
                   <div className="flex items-center gap-1.5 text-xs text-gray-500">
                      <ShoppingBag size={14} />
-                     <span>{link.sales} vendas</span>
+                     <span>{(link.sales ?? 0)} vendas</span>
                   </div>
                </div>
                
@@ -161,11 +330,11 @@ export const PaymentLinks: React.FC = () => {
             </div>
 
           </div>
-        ))}
+        )))}
 
         {/* Add New Card (Empty State Style) */}
         <button 
-          onClick={() => setIsModalOpen(true)}
+        onClick={openCreateModal}
           className="border-2 border-dashed border-gray-200 rounded-2xl p-6 flex flex-col items-center justify-center text-center hover:bg-gray-50/50 hover:border-brand-primary/40 transition-all group min-h-[280px]"
         >
            <div className="w-16 h-16 rounded-full bg-gray-50 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform duration-300">
@@ -176,14 +345,24 @@ export const PaymentLinks: React.FC = () => {
         </button>
       </div>
 
-      {/* Create Modal */}
+      {/* Create / Edit Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md transform transition-all scale-100">
             
             <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
-              <h3 className="text-lg font-bold text-dark-text">Novo Link de Pagamento</h3>
-              <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-gray-600">
+              <h3 className="text-lg font-bold text-dark-text">
+                {editingId ? 'Editar Link de Pagamento' : 'Novo Link de Pagamento'}
+              </h3>
+              <button
+                onClick={() => {
+                  if (isCreating) return;
+                  setIsModalOpen(false);
+                  setEditingId(null);
+                }}
+                className="text-gray-400 hover:text-gray-600 disabled:opacity-50"
+                disabled={isCreating}
+              >
                 <X size={20} />
               </button>
             </div>
@@ -218,22 +397,51 @@ export const PaymentLinks: React.FC = () => {
 
             <div className="px-6 py-4 bg-gray-50 rounded-b-2xl flex justify-end gap-3">
                <button 
-                onClick={() => setIsModalOpen(false)}
-                className="px-5 py-2.5 text-sm font-semibold text-gray-600 hover:bg-gray-200 rounded-xl transition-colors"
+                onClick={() => {
+                  if (isCreating) return;
+                  setIsModalOpen(false);
+                  setEditingId(null);
+                }}
+                className="px-5 py-2.5 text-sm font-semibold text-gray-600 hover:bg-gray-200 rounded-xl transition-colors disabled:opacity-50"
+                disabled={isCreating}
                >
                  Cancelar
                </button>
                <button 
-                onClick={handleCreateLink}
-                className="px-5 py-2.5 text-sm font-bold text-white bg-brand-primary hover:bg-brand-hover rounded-xl shadow-md shadow-indigo-200 transition-all"
+                onClick={handleCreateOrUpdateLink}
+                disabled={isCreating}
+                className="px-5 py-2.5 text-sm font-bold text-white bg-brand-primary hover:bg-brand-hover rounded-xl shadow-md shadow-indigo-200 transition-all disabled:opacity-50 flex items-center gap-2"
                >
-                 Criar Link
+                 {isCreating ? (
+                   <>
+                     <Loader2 size={16} className="animate-spin" />
+                     {editingId ? 'A atualizar...' : 'A criar...'}
+                   </>
+                 ) : (
+                   editingId ? 'Guardar alterações' : 'Criar Link'
+                 )}
                </button>
             </div>
 
           </div>
         </div>
       )}
+
+      <ConfirmModal
+        isOpen={!!confirmDelete}
+        title="Apagar link de pagamento"
+        message={
+          confirmDelete
+            ? `Tem a certeza que deseja apagar o link "${confirmDelete.title}"? Esta ação não pode ser desfeita.`
+            : ''
+        }
+        confirmLabel="Apagar"
+        cancelLabel="Cancelar"
+        variant="danger"
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setConfirmDelete(null)}
+        isLoading={!!(confirmDelete && deletingId === confirmDelete.id)}
+      />
 
     </div>
   );

@@ -14,6 +14,7 @@ import { Reports } from './pages/Reports';
 import { Team } from './pages/Team';
 import { Profile } from './pages/Profile';
 import { Login } from './pages/Login';
+import { PublicPaymentLink } from './pages/PublicPaymentLink';
 import { ViewState } from './types';
 import { useAuth } from './contexts/AuthContext';
 
@@ -42,6 +43,10 @@ const getViewFromPath = (pathname: string): ViewState => {
     case '/checkout-preview':
       return 'checkout_preview';
     default:
+      // rota pública de link de pagamento (/p/:code)
+      if (pathname.startsWith('/p/')) {
+        return 'checkout_preview';
+      }
       return 'dashboard';
   }
 };
@@ -90,8 +95,11 @@ const App: React.FC = () => {
     }
   };
 
-  // Public View: Checkout Preview (acessível sem login)
+  // Public View: Checkout Preview / Public Payment Link (acessível sem login)
   if (currentView === 'checkout_preview') {
+    if (location.pathname.startsWith('/p/')) {
+      return <PublicPaymentLink />;
+    }
     return (
       <>
         <div className="fixed top-4 left-4 z-50">

@@ -15,8 +15,12 @@ const STATUS_MAP: Record<ApiOrder['status'], TransactionStatus> = {
 
 const PAYMENT_STATUS_MAP: Record<string, TransactionStatus> = {
   pending: TransactionStatus.PENDING,
+  processing: TransactionStatus.PENDING,
   paid: TransactionStatus.PAID,
   failed: TransactionStatus.FAILED,
+  cancelled: TransactionStatus.CANCELLED,
+  refunded: TransactionStatus.REFUNDED,
+  expired: TransactionStatus.FAILED,
 };
 
 const GATEWAY_TO_METHOD: Record<string, 'e-kwanza' | 'card' | 'multicaixa_express'> = {
@@ -57,6 +61,35 @@ const PRODUCT_TYPE_LABELS: Record<string, string> = {
   service: 'Serviço',
 };
 
+function computeOrderStatusFromPayments(api: ApiOrder): TransactionStatus | null {
+  const payments = api.payments ?? [];
+  if (payments.length === 0) return null;
+
+  const statuses = payments.map((p) => p.status);
+
+  if (statuses.some((s) => s === 'paid')) {
+    return TransactionStatus.PAID;
+  }
+
+  if (statuses.some((s) => s === 'pending' || s === 'processing')) {
+    return TransactionStatus.PENDING;
+  }
+
+  if (statuses.some((s) => s === 'refunded')) {
+    return TransactionStatus.REFUNDED;
+  }
+
+  if (statuses.some((s) => s === 'cancelled')) {
+    return TransactionStatus.CANCELLED;
+  }
+
+  if (statuses.some((s) => s === 'failed' || s === 'expired')) {
+    return TransactionStatus.FAILED;
+  }
+
+  return null;
+}
+
 export interface OrderDisplay extends Transaction {
   productName?: string;
   productPrice?: number;
@@ -89,6 +122,7 @@ export function apiOrderToOrderDisplay(api: ApiOrder): OrderDisplay {
   const total = parseFloat(api.total) || 0;
   const lastPayment = api.payments && api.payments.length > 0 ? api.payments[api.payments.length - 1] : null;
   const method = lastPayment ? (GATEWAY_TO_METHOD[lastPayment.gateway] ?? 'e-kwanza') : 'e-kwanza';
+  const derivedStatus = computeOrderStatusFromPayments(api);
 
   return {
     id: api.id,
@@ -96,7 +130,7 @@ export function apiOrderToOrderDisplay(api: ApiOrder): OrderDisplay {
     customerEmail: api.customer?.email ?? '—',
     amount: total,
     date: formatDate(api.created_at),
-    status: STATUS_MAP[api.status] ?? TransactionStatus.PENDING,
+    status: derivedStatus ?? (STATUS_MAP[api.status] ?? TransactionStatus.PENDING),
     method,
     productName: api.product?.name,
     productPrice: api.product ? parseFloat(api.product.price) : undefined,
@@ -137,6 +171,8 @@ export interface PaymentDisplay {
   customerEmail: string;
   productName?: string;
   orderStatus: string;
+  gatewayReference?: string | null;
+  gatewayCode?: string | null;
 }
 
 /** Converte ApiPayment + ApiOrder para PaymentDisplay (página Transações). */
@@ -152,6 +188,8 @@ export function apiPaymentToDisplay(payment: ApiPayment, order: ApiOrder): Payme
     customerEmail: order.customer?.email ?? '—',
     productName: order.product?.name,
     orderStatus: order.status,
+    gatewayReference: payment.gateway_reference ?? null,
+    gatewayCode: payment.gateway_code ?? null,
   };
 }
 

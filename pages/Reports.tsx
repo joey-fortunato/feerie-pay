@@ -1,47 +1,290 @@
 
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell, Legend } from 'recharts';
-import { Download, Calendar, TrendingUp, DollarSign, CreditCard, Smartphone, ArrowUpRight, Filter, Info, ShoppingCart, RefreshCw, FileText, CalendarClock, AlertCircle } from 'lucide-react';
+import { Download, Calendar, TrendingUp, DollarSign, CreditCard, Smartphone, ArrowUpRight, Filter, Info, ShoppingCart, RefreshCw, FileText, CalendarClock, AlertCircle, X, Loader2 } from 'lucide-react';
+import type { ApiOrder, ApiPayment } from '../api/types';
+import { ordersApi } from '../services/ordersApi';
 
-// Mock Data for Revenue
-const revenueData = [
-  { name: '01 Out', gross: 45000, net: 42750 },
-  { name: '05 Out', gross: 80000, net: 76000 },
-  { name: '10 Out', gross: 120000, net: 114000 },
-  { name: '15 Out', gross: 95000, net: 90250 },
-  { name: '20 Out', gross: 150000, net: 142500 },
-  { name: '25 Out', gross: 180000, net: 171000 },
-  { name: '30 Out', gross: 220000, net: 209000 },
-];
+type ReportsDateRange = '7_days' | 'this_month' | 'last_month' | 'custom';
 
-// Mock Data for Payment Methods
-const paymentMethodsData = [
-  { name: 'e-kwanza', value: 65 },
-  { name: 'Multicaixa / Card', value: 35 },
-];
-const COLORS = ['#6363F1', '#F97316']; // Brand Primary & Orange
+type AccountingRow = {
+  id: number;
+  description: string;
+  type: 'credit' | 'debit';
+  value: number;
+};
 
-// Mock Data for Top Products
-const topProductsData = [
-  { name: 'Curso Marketing', sales: 120 },
-  { name: 'Ebook E-kwanza', sales: 85 },
-  { name: 'Mentoria VIP', sales: 45 },
-  { name: 'Livro Físico', sales: 30 },
-];
+type RevenuePoint = { name: string; gross: number; net: number };
 
-// Mock Data for Accounting Table
-const accountingData = [
-  { id: 1, description: 'Vendas Brutas (Cartão)', type: 'credit', value: 450000 },
-  { id: 2, description: 'Vendas Brutas (e-kwanza)', type: 'credit', value: 840000 },
-  { id: 3, description: 'Taxas de Processamento', type: 'debit', value: -44500 },
-  { id: 4, description: 'Reembolsos / Estornos', type: 'debit', value: -25000 },
-  { id: 5, description: 'Taxas de Saque', type: 'debit', value: -2000 },
-];
+type PaymentMethodSlice = { name: string; value: number };
+
+type TopProductPoint = { name: string; sales: number };
+
+const COLORS = ['#6363F1', '#F97316', '#10B981']; // Brand Primary, Orange, Green
+
+const parseDate = (iso?: string | null): Date | null => {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+const formatDayLabel = (d: Date): string =>
+  d.toLocaleDateString('pt-AO', { day: '2-digit', month: 'short' });
 
 export const Reports: React.FC = () => {
-  const [dateRange, setDateRange] = useState('this_month');
+  const [dateRange, setDateRange] = useState<ReportsDateRange>('this_month');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+  const [isCustomModalOpen, setIsCustomModalOpen] = useState(false);
+  const [orders, setOrders] = useState<ApiOrder[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const totalAccounting = accountingData.reduce((acc, curr) => acc + curr.value, 0);
+  useEffect(() => {
+    const fetchOrders = async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const res = await ordersApi.list(1, 200);
+        const data = Array.isArray(res?.data) ? res.data : [];
+        setOrders(data);
+      } catch (err) {
+        console.error('[Reports] Erro ao carregar dados:', err);
+        setError('Não foi possível carregar os dados dos relatórios. Verifique se o backend está a correr.');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    fetchOrders();
+  }, []);
+
+  const [startDate, endDate] = useMemo(() => {
+    const now = new Date();
+    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+    if (dateRange === '7_days') {
+      const start = new Date(end);
+      start.setDate(start.getDate() - 6);
+      return [start, end] as const;
+    }
+
+    if (dateRange === 'last_month') {
+      const firstOfThis = new Date(end.getFullYear(), end.getMonth(), 1);
+      const lastOfLast = new Date(firstOfThis.getTime() - 1);
+      const start = new Date(lastOfLast.getFullYear(), lastOfLast.getMonth(), 1, 0, 0, 0, 0);
+      return [start, lastOfLast] as const;
+    }
+
+    if (dateRange === 'custom' && customStart && customEnd) {
+      const start = new Date(customStart);
+      const endCustom = new Date(customEnd);
+      endCustom.setHours(23, 59, 59, 999);
+      return [start, endCustom] as const;
+    }
+
+    const start = new Date(end.getFullYear(), end.getMonth(), 1, 0, 0, 0, 0);
+    return [start, end] as const;
+  }, [dateRange, customStart, customEnd]);
+
+  const filteredOrders = useMemo(
+    () =>
+      orders.filter((order) => {
+        const d = parseDate(order.paid_at || order.created_at);
+        if (!d) return false;
+        return d >= startDate && d <= endDate;
+      }),
+    [orders, startDate, endDate]
+  );
+
+  const paidOrders = useMemo(
+    () => filteredOrders.filter((o) => o.status === 'paid'),
+    [filteredOrders]
+  );
+
+  const allPayments: ApiPayment[] = useMemo(() => {
+    const list: ApiPayment[] = [];
+    filteredOrders.forEach((order) => {
+      if (Array.isArray(order.payments)) {
+        order.payments.forEach((p) => list.push(p));
+      }
+    });
+    return list;
+  }, [filteredOrders]);
+
+  const revenueData: RevenuePoint[] = useMemo(() => {
+    const map = new Map<string, { gross: number; net: number }>();
+    paidOrders.forEach((order) => {
+      const d = parseDate(order.paid_at || order.created_at);
+      if (!d) return;
+      const key = formatDayLabel(d);
+      const total = parseFloat(order.total ?? '0') || 0;
+      const prev = map.get(key) ?? { gross: 0, net: 0 };
+      const gross = prev.gross + total;
+      const net = gross * 0.966; // ~3.4% de taxas
+      map.set(key, { gross, net });
+    });
+    return Array.from(map.entries())
+      .sort((a, b) => a[0].localeCompare(b[0], 'pt-AO'))
+      .map(([name, vals]) => ({ name, gross: vals.gross, net: vals.net }));
+  }, [paidOrders]);
+
+  const paymentMethodsData: PaymentMethodSlice[] = useMemo(() => {
+    let gpoTotal = 0;
+    let refTotal = 0;
+    let ekTotal = 0;
+
+    allPayments
+      .filter((p) => p.status === 'paid')
+      .forEach((p) => {
+        const amount = parseFloat(p.amount ?? '0') || 0;
+        if (p.gateway === 'gpo') gpoTotal += amount;
+        else if (p.gateway === 'ref') refTotal += amount;
+        else if (p.gateway === 'ekwanza_ticket') ekTotal += amount;
+      });
+
+    const total = gpoTotal + refTotal + ekTotal;
+    if (total <= 0) return [];
+
+    const toPercent = (value: number) =>
+      Math.round((value / total) * 100);
+
+    const slices: PaymentMethodSlice[] = [];
+    if (gpoTotal > 0) {
+      slices.push({ name: 'Multicaixa Express', value: toPercent(gpoTotal) });
+    }
+    if (refTotal > 0) {
+      slices.push({ name: 'Referência Multicaixa', value: toPercent(refTotal) });
+    }
+    if (ekTotal > 0) {
+      slices.push({ name: 'E-Kwanza', value: toPercent(ekTotal) });
+    }
+    return slices;
+  }, [allPayments]);
+
+  const topProductsData: TopProductPoint[] = useMemo(() => {
+    const map = new Map<string, { name: string; sales: number }>();
+    paidOrders.forEach((order) => {
+      const productName = order.product?.name ?? 'Produto';
+      const entry = map.get(order.product_id) ?? { name: productName, sales: 0 };
+      entry.sales += 1;
+      map.set(order.product_id, entry);
+    });
+    return Array.from(map.values())
+      .sort((a, b) => b.sales - a.sales)
+      .slice(0, 10);
+  }, [paidOrders]);
+
+  const accountingData: AccountingRow[] = useMemo(() => {
+    let grossCard = 0;
+    let grossEkwanza = 0;
+    let refunds = 0;
+
+    allPayments.forEach((p) => {
+      const amount = parseFloat(p.amount ?? '0') || 0;
+      if (p.status === 'paid') {
+        if (p.gateway === 'ekwanza_ticket') grossEkwanza += amount;
+        else if (p.gateway === 'gpo' || p.gateway === 'ref') grossCard += amount;
+      }
+      if (p.status === 'refunded') {
+        refunds += amount;
+      }
+    });
+
+    const totalGross = grossCard + grossEkwanza;
+    const fees = totalGross * 0.034;
+    const withdrawalsFees = 0;
+
+    const rows: AccountingRow[] = [];
+    if (grossCard > 0) {
+      rows.push({
+        id: 1,
+        description: 'Vendas Brutas (Cartão / REF)',
+        type: 'credit',
+        value: grossCard,
+      });
+    }
+    if (grossEkwanza > 0) {
+      rows.push({
+        id: 2,
+        description: 'Vendas Brutas (E-Kwanza)',
+        type: 'credit',
+        value: grossEkwanza,
+      });
+    }
+    if (fees > 0) {
+      rows.push({
+        id: 3,
+        description: 'Taxas de Processamento (estimadas)',
+        type: 'debit',
+        value: -fees,
+      });
+    }
+    if (refunds > 0) {
+      rows.push({
+        id: 4,
+        description: 'Reembolsos / Estornos',
+        type: 'debit',
+        value: -refunds,
+      });
+    }
+    if (withdrawalsFees > 0) {
+      rows.push({
+        id: 5,
+        description: 'Taxas de Saque',
+        type: 'debit',
+        value: -withdrawalsFees,
+      });
+    }
+    return rows;
+  }, [allPayments]);
+
+  const totalAccounting = useMemo(
+    () => accountingData.reduce((acc, curr) => acc + curr.value, 0),
+    [accountingData]
+  );
+
+  const aggregates = useMemo(() => {
+    const grossCardRow = accountingData.find((r) =>
+      r.description.startsWith('Vendas Brutas (Cartão')
+    );
+    const grossEkwanzaRow = accountingData.find((r) =>
+      r.description.startsWith('Vendas Brutas (E-Kwanza')
+    );
+    const feesRow = accountingData.find((r) =>
+      r.description.startsWith('Taxas de Processamento')
+    );
+
+    const grossRevenue =
+      (grossCardRow?.value ?? 0) + (grossEkwanzaRow?.value ?? 0);
+    const feesTotal = Math.abs(feesRow?.value ?? 0);
+
+    // A receber (futuro): soma dos pedidos que ainda não estão pagos
+    const futureAmount = filteredOrders
+      .filter((o) => o.status === 'pending' || o.status === 'processing')
+      .reduce(
+        (acc, o) => acc + (parseFloat(o.total ?? '0') || 0),
+        0
+      );
+
+    return {
+      grossRevenue,
+      netAvailable: totalAccounting,
+      futureAmount,
+      feesTotal,
+    };
+  }, [accountingData, filteredOrders, totalAccounting]);
+
+  const handleExportPdf = () => {
+    if (typeof window !== 'undefined') {
+      window.print();
+    }
+  };
+
+  const handleDownloadStatement = () => {
+    if (typeof window !== 'undefined') {
+      window.print();
+    }
+  };
 
   return (
     <div className="p-6 lg:p-10 max-w-7xl mx-auto space-y-8">
@@ -70,11 +313,17 @@ export const Reports: React.FC = () => {
          </div>
 
          <div className="flex gap-3">
-            <button className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors">
+            <button
+              className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+              onClick={() => setIsCustomModalOpen(true)}
+            >
                <Calendar size={16} />
                <span>Personalizar</span>
             </button>
-            <button className="flex items-center gap-2 px-4 py-2.5 bg-brand-primary text-white rounded-xl text-sm font-bold hover:bg-brand-hover shadow-lg shadow-indigo-500/20 transition-all">
+            <button
+              className="flex items-center gap-2 px-4 py-2.5 bg-brand-primary text-white rounded-xl text-sm font-bold hover:bg-brand-hover shadow-lg shadow-indigo-500/20 transition-all"
+              onClick={handleExportPdf}
+            >
                <Download size={16} />
                <span>Exportar PDF</span>
             </button>
@@ -88,7 +337,9 @@ export const Reports: React.FC = () => {
             <div className="flex justify-between items-start mb-4 relative z-10">
                <div>
                   <p className="text-sm text-gray-500 font-medium mb-1">Receita Bruta</p>
-                  <h3 className="text-2xl font-bold text-dark-text">Kz 1.290.000</h3>
+                  <h3 className="text-2xl font-bold text-dark-text">
+                    Kz {aggregates.grossRevenue.toLocaleString()}
+                  </h3>
                </div>
                <div className="p-3 bg-indigo-50 text-brand-primary rounded-xl">
                   <DollarSign size={20} />
@@ -109,7 +360,9 @@ export const Reports: React.FC = () => {
                      <p className="text-sm text-gray-500 font-medium">Líquido Disponível</p>
                      <Info size={12} className="text-gray-400" />
                   </div>
-                  <h3 className="text-2xl font-bold text-green-600">Kz 845.500</h3>
+                  <h3 className="text-2xl font-bold text-green-600">
+                    Kz {aggregates.netAvailable.toLocaleString()}
+                  </h3>
                </div>
                <div className="p-3 bg-green-50 text-green-600 rounded-xl">
                   <CreditCard size={20} />
@@ -123,7 +376,9 @@ export const Reports: React.FC = () => {
             <div className="flex justify-between items-start mb-4 relative z-10">
                <div>
                   <p className="text-sm text-gray-500 font-medium mb-1">A Receber (Futuro)</p>
-                  <h3 className="text-2xl font-bold text-blue-600">Kz 150.000</h3>
+                  <h3 className="text-2xl font-bold text-blue-600">
+                    Kz {aggregates.futureAmount.toLocaleString()}
+                  </h3>
                </div>
                <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
                   <CalendarClock size={20} />
@@ -140,7 +395,9 @@ export const Reports: React.FC = () => {
             <div className="flex justify-between items-start mb-4 relative z-10">
                <div>
                   <p className="text-sm text-gray-500 font-medium mb-1">Total de Taxas</p>
-                  <h3 className="text-2xl font-bold text-dark-text">Kz 44.500</h3>
+                  <h3 className="text-2xl font-bold text-dark-text">
+                    Kz {aggregates.feesTotal.toLocaleString()}
+                  </h3>
                </div>
                <div className="p-3 bg-orange-50 text-orange-500 rounded-xl">
                   <Filter size={20} />
@@ -189,10 +446,16 @@ export const Reports: React.FC = () => {
             <h3 className="text-lg font-bold text-dark-text mb-2">Canais de Pagamento</h3>
             <p className="text-sm text-gray-400 mb-6">Preferência dos seus clientes</p>
             
-            <div className="flex-1 relative min-h-[250px]">
-               <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                     <Pie
+            {paymentMethodsData.length === 0 ? (
+              <div className="flex-1 min-h-[250px] flex flex-col items-center justify-center text-sm text-gray-400">
+                <p>Não há pagamentos no período selecionado.</p>
+              </div>
+            ) : (
+              <>
+                <div className="flex-1 relative min-h-[250px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
                         data={paymentMethodsData}
                         cx="50%"
                         cy="50%"
@@ -201,43 +464,60 @@ export const Reports: React.FC = () => {
                         fill="#8884d8"
                         paddingAngle={5}
                         dataKey="value"
-                     >
-                        {paymentMethodsData.map((entry, index) => (
-                           <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                        ))}
-                     </Pie>
-                     <Tooltip />
-                  </PieChart>
-               </ResponsiveContainer>
-               {/* Centered Total */}
-               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <div className="text-center">
-                     <p className="text-3xl font-bold text-dark-text">100%</p>
-                     <p className="text-xs text-gray-400">Volume</p>
+                      >
+                        {paymentMethodsData.map((entry, index) => {
+                          const color =
+                            entry.name === 'E-Kwanza'
+                              ? COLORS[0]
+                              : entry.name === 'Multicaixa Express'
+                              ? COLORS[1]
+                              : COLORS[2];
+                          return <Cell key={`cell-${index}`} fill={color} />;
+                        })}
+                      </Pie>
+                      <Tooltip formatter={(value: number) => [`${value}%`, 'Participação']} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  {/* Centered Total */}
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <div className="text-center">
+                      <p className="text-3xl font-bold text-dark-text">100%</p>
+                      <p className="text-xs text-gray-400">Receita por gateway</p>
+                    </div>
                   </div>
-               </div>
-            </div>
+                </div>
 
-            <div className="space-y-4 mt-4">
-               <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
-                  <div className="flex items-center gap-3">
-                     <div className="w-8 h-8 bg-indigo-100 rounded-lg flex items-center justify-center text-brand-primary">
-                        <Smartphone size={16} />
-                     </div>
-                     <span className="text-sm font-medium text-dark-text">e-kwanza</span>
-                  </div>
-                  <span className="font-bold text-dark-text">65%</span>
-               </div>
-               <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
-                  <div className="flex items-center gap-3">
-                     <div className="w-8 h-8 bg-orange-100 rounded-lg flex items-center justify-center text-orange-500">
-                        <CreditCard size={16} />
-                     </div>
-                     <span className="text-sm font-medium text-dark-text">Cartão / Multi</span>
-                  </div>
-                  <span className="font-bold text-dark-text">35%</span>
-               </div>
-            </div>
+                <div className="space-y-4 mt-4">
+                  {paymentMethodsData.map((m) => (
+                    <div
+                      key={m.name}
+                      className="flex items-center justify-between p-3 bg-gray-50 rounded-xl"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div
+                          className={[
+                            'w-8 h-8 rounded-lg flex items-center justify-center',
+                            m.name === 'E-Kwanza'
+                              ? 'bg-indigo-100 text-brand-primary'
+                              : m.name === 'Multicaixa Express'
+                              ? 'bg-orange-100 text-orange-500'
+                              : 'bg-emerald-100 text-emerald-600',
+                          ].join(' ')}
+                        >
+                          {m.name === 'E-Kwanza' && <Smartphone size={16} />}
+                          {m.name === 'Multicaixa Express' && <Smartphone size={16} />}
+                          {m.name === 'Referência Multicaixa' && <CreditCard size={16} />}
+                        </div>
+                        <span className="text-sm font-medium text-dark-text">{m.name}</span>
+                      </div>
+                      <span className="font-bold text-dark-text">
+                        {m.value.toLocaleString()}%
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
          </div>
       </div>
 
@@ -332,7 +612,12 @@ export const Reports: React.FC = () => {
                   </h3>
                   <p className="text-sm text-gray-500">Resumo financeiro para contabilidade.</p>
                </div>
-               <button className="text-brand-primary text-sm font-bold hover:underline">Baixar Extrato</button>
+               <button
+                 className="text-brand-primary text-sm font-bold hover:underline"
+                 onClick={handleDownloadStatement}
+               >
+                 Baixar Extrato
+               </button>
             </div>
             
             <div className="overflow-x-auto">
@@ -393,6 +678,87 @@ export const Reports: React.FC = () => {
          </div>
 
       </div>
+      {isCustomModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-lg font-bold text-dark-text">Filtrar por data</h3>
+              <button
+                onClick={() => setIsCustomModalOpen(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <p className="text-sm text-gray-500">
+              Escolha um intervalo personalizado para os relatórios financeiros.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                  Data inicial
+                </label>
+                <input
+                  type="date"
+                  value={customStart}
+                  onChange={(e) => setCustomStart(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-gray-200 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none text-sm"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                  Data final
+                </label>
+                <input
+                  type="date"
+                  value={customEnd}
+                  onChange={(e) => setCustomEnd(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-gray-200 focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none text-sm"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={() => setIsCustomModalOpen(false)}
+                className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-xl"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => {
+                  if (customStart && customEnd) {
+                    setDateRange('custom');
+                    setIsCustomModalOpen(false);
+                  }
+                }}
+                disabled={!customStart || !customEnd}
+                className="px-4 py-2 text-sm font-bold text-white bg-brand-primary hover:bg-brand-hover rounded-xl disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Aplicar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="fixed bottom-4 right-4 max-w-sm bg-red-50 border border-red-100 text-red-700 text-sm px-4 py-3 rounded-xl shadow-lg flex items-start gap-2">
+          <AlertCircle size={18} className="mt-0.5" />
+          <div>
+            <p className="font-semibold">Erro ao carregar relatórios</p>
+            <p>{error}</p>
+          </div>
+        </div>
+      )}
+
+      {isLoading && (
+        <div className="fixed inset-0 pointer-events-none flex items-center justify-center">
+          <div className="px-4 py-2 bg-white/90 border border-gray-200 rounded-xl shadow-sm text-sm text-gray-600 flex items-center gap-2">
+            <Loader2 size={16} className="animate-spin text-brand-primary" />
+            <span>A atualizar dados...</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

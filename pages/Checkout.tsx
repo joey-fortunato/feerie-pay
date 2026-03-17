@@ -7,7 +7,7 @@ import { paymentsApi } from '../services/paymentsApi';
 import { productsApi } from '../services/productsApi';
 import { useToast } from '../contexts/ToastContext';
 import { ApiError, getFriendlyErrorMessage } from '../services/api';
-import type { ApiProduct, CreateOrderResponse } from '../api/types';
+import type { ApiProduct, CreateOrderResponse, ApiOrder } from '../api/types';
 
 /** Produto demo para quando a API de produtos falhar ou estiver vazia */
 const DEMO_PRODUCT: ApiProduct = {
@@ -26,6 +26,11 @@ const DEMO_PRODUCT: ApiProduct = {
 
 /** Métodos da API: gpo (MCX), ref (EMIS), ekwanza_ticket (QR E-Kwanza) — doc API 3.3 */
 type PaymentMethodApi = 'gpo' | 'ref' | 'ekwanza_ticket';
+
+const getSearchParams = () => {
+  if (typeof window === 'undefined') return new URLSearchParams();
+  return new URLSearchParams(window.location.search);
+};
 
 export const Checkout: React.FC<{ productId?: string }> = ({ productId: propProductId }) => {
   const toast = useToast();
@@ -46,6 +51,7 @@ export const Checkout: React.FC<{ productId?: string }> = ({ productId: propProd
 
   const [pollIntervalId, setPollIntervalId] = useState<ReturnType<typeof setInterval> | null>(null);
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
+  const [isLinkMode, setIsLinkMode] = useState(false);
 
   useEffect(() => {
     productsApi.list(1, 50).then((r) => {
@@ -62,8 +68,13 @@ export const Checkout: React.FC<{ productId?: string }> = ({ productId: propProd
     });
   }, [propProductId]);
 
+  const params = getSearchParams();
+  const linkTitle = params.get('link_title');
+  const linkAmountParam = params.get('link_amount');
+
   const selectedProduct = products.find((p) => p.id === selectedProductId);
-  const basePrice = selectedProduct ? parseFloat(selectedProduct.price) : 25000;
+  const basePriceFromProduct = selectedProduct ? parseFloat(selectedProduct.price) : 25000;
+  const basePrice = linkAmountParam ? parseFloat(linkAmountParam) || basePriceFromProduct : basePriceFromProduct;
   const bumpPrice = 5000;
   const subtotal = basePrice + (orderBump ? bumpPrice : 0);
   const discountAmount = appliedCoupon?.discountAmount ?? 0;
@@ -180,6 +191,20 @@ export const Checkout: React.FC<{ productId?: string }> = ({ productId: propProd
     }, 5000);
     setPollIntervalId(id);
   }, []);
+
+  useEffect(() => {
+    const params = getSearchParams();
+    const paymentId = params.get('payment_id');
+    const orderId = params.get('order_id');
+    const linkCode = params.get('link_code');
+    if (paymentId || orderId || linkCode) {
+      setIsLinkMode(true);
+      if (paymentId) {
+        setStep(2);
+        startPolling(paymentId);
+      }
+    }
+  }, [startPolling]);
 
   const handlePayment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -341,7 +366,7 @@ export const Checkout: React.FC<{ productId?: string }> = ({ productId: propProd
               <div className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center"><ShieldCheck size={18} /></div>
               <span className="font-medium text-sm tracking-wide">CHECKOUT SEGURO</span>
             </div>
-            <h1 className="text-3xl lg:text-4xl font-bold mb-4">{selectedProduct?.name || 'Produto'}</h1>
+            <h1 className="text-3xl lg:text-4xl font-bold mb-4">{linkTitle || selectedProduct?.name || 'Produto'}</h1>
             <p className="text-gray-300 text-lg">Total: Kz {displayTotal.toLocaleString()}</p>
           </div>
           <div className="absolute top-0 right-0 w-64 h-64 bg-brand-primary/20 rounded-full blur-3xl -mr-16 -mt-16"></div>

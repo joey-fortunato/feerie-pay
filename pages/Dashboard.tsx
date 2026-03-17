@@ -1,24 +1,42 @@
 
-import React from 'react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
-import { ArrowUpRight, ArrowDownRight, Wallet, Users, CreditCard, Activity, Smartphone } from 'lucide-react';
-import { ChartData, Transaction } from '../types';
+import React, { useEffect, useMemo, useState } from 'react';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { ArrowUpRight, ArrowDownRight, Wallet, Users, CreditCard, Activity } from 'lucide-react';
+import { ChartData, Transaction, TransactionStatus } from '../types';
+import type { ApiOrder, ApiPayment } from '../api/types';
+import { ordersApi } from '../services/ordersApi';
 
-const mockData: ChartData[] = [
-  { name: 'Seg', value: 40000 },
-  { name: 'Ter', value: 30000 },
-  { name: 'Qua', value: 55000 },
-  { name: 'Qui', value: 45000 },
-  { name: 'Sex', value: 80000 },
-  { name: 'Sáb', value: 65000 },
-  { name: 'Dom', value: 90000 },
-];
+type DashboardDateRange = '7_days' | 'this_month';
 
-const recentTransactions: Transaction[] = [
-  { id: 'TX1234', customerName: 'Ana Sousa', customerEmail: 'ana@gmail.com', amount: 15000, date: 'Hoje, 14:30', status: 'PAID', method: 'e-kwanza' } as any,
-  { id: 'TX1235', customerName: 'Carlos Pinto', customerEmail: 'carlos@live.com', amount: 5000, date: 'Hoje, 13:15', status: 'PENDING', method: 'card' } as any,
-  { id: 'TX1236', customerName: 'Maria Silva', customerEmail: 'maria@outlook.com', amount: 25000, date: 'Ontem, 18:20', status: 'PAID', method: 'multicaixa_express' } as any,
-];
+const parseDate = (iso?: string | null): Date | null => {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+const formatDayLabel = (d: Date): string =>
+  d.toLocaleDateString('pt-AO', { day: '2-digit', month: 'short' });
+
+const mapPaymentStatusToTransactionStatus = (status: string): TransactionStatus => {
+  switch (status) {
+    case 'paid':
+      return TransactionStatus.PAID;
+    case 'failed':
+      return TransactionStatus.FAILED;
+    case 'cancelled':
+      return TransactionStatus.CANCELLED;
+    case 'refunded':
+      return TransactionStatus.REFUNDED;
+    default:
+      return TransactionStatus.PENDING;
+  }
+};
+
+const mapGatewayToMethod = (gateway: ApiPayment['gateway']): Transaction['method'] => {
+  if (gateway === 'ekwanza_ticket') return 'e-kwanza';
+  if (gateway === 'gpo') return 'multicaixa_express';
+  return 'card';
+};
 
 const StatCard = ({ title, value, trend, icon: Icon, trendUp }: any) => (
   <div className="bg-white p-6 rounded-2xl shadow-soft border border-gray-50">
@@ -37,14 +55,182 @@ const StatCard = ({ title, value, trend, icon: Icon, trendUp }: any) => (
 );
 
 export const Dashboard: React.FC = () => {
+  const [orders, setOrders] = useState<ApiOrder[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [dateRange, setDateRange] = useState<DashboardDateRange>('7_days');
+
+  useEffect(() => {
+    const fetchOrders = async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const res = await ordersApi.list(1, 100);
+        const data = Array.isArray(res?.data) ? res.data : [];
+        setOrders(data);
+      } catch (err) {
+        console.error('[Dashboard] Erro ao carregar dados:', err);
+        setError('Não foi possível carregar os dados do dashboard. Verifique se o backend está a correr.');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    fetchOrders();
+  }, []);
+
+  const [startDate, endDate] = useMemo(() => {
+    const now = new Date();
+    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    if (dateRange === '7_days') {
+      const start = new Date(end);
+      start.setDate(start.getDate() - 6);
+      return [start, end] as const;
+    }
+    // this_month
+    const start = new Date(end.getFullYear(), end.getMonth(), 1, 0, 0, 0, 0);
+    return [start, end] as const;
+  }, [dateRange]);
+
+  const filteredOrders = useMemo(() => {
+    return orders.filter((order) => {
+      const d = parseDate(order.paid_at || order.created_at);
+      if (!d) return false;
+      return d >= startDate && d <= endDate;
+    });
+  }, [orders, startDate, endDate]);
+
+  const paidOrders = useMemo(
+    () => filteredOrders.filter((o) => o.status === 'paid'),
+    [filteredOrders]
+  );
+
+  const chartData: ChartData[] = useMemo(() => {
+    const map = new Map<string, number>();
+    filteredOrders.forEach((order) => {
+      const d = parseDate(order.paid_at || order.created_at);
+      if (!d) return;
+      const key = formatDayLabel(d);
+      const total = parseFloat(order.total ?? '0') || 0;
+      map.set(key, (map.get(key) ?? 0) + total);
+    });
+    return Array.from(map.entries())
+      .sort((a, b) => {
+        const [da, db] = [a[0], b[0]];
+        return da.localeCompare(db, 'pt-AO');
+      })
+      .map(([name, value]) => ({ name, value }));
+  }, [filteredOrders]);
+
+  const stats = useMemo(() => {
+    const totalRevenue = paidOrders.reduce(
+      (acc, o) => acc + (parseFloat(o.total ?? '0') || 0),
+      0
+    );
+
+    const allPayments: ApiPayment[] = [];
+    filteredOrders.forEach((order) => {
+      if (Array.isArray(order.payments)) {
+        order.payments.forEach((p) => allPayments.push(p));
+      }
+    });
+
+    const successfulPayments = allPayments.filter((p) => p.status === 'paid');
+    const totalTransactions = successfulPayments.length;
+
+    const ticketMedio =
+      paidOrders.length > 0 ? totalRevenue / paidOrders.length : 0;
+
+    const uniqueCustomers = new Set(
+      filteredOrders
+        .map((o) => o.customer?.id || o.customer_id)
+        .filter(Boolean)
+    );
+
+    return {
+      totalRevenue,
+      totalTransactions,
+      ticketMedio,
+      newCustomers: uniqueCustomers.size,
+    };
+  }, [filteredOrders, paidOrders]);
+
+  const recentTransactions: Transaction[] = useMemo(() => {
+    const items: Transaction[] = [];
+    filteredOrders.forEach((order) => {
+      if (!Array.isArray(order.payments)) return;
+      order.payments.forEach((payment) => {
+        const date = parseDate(payment.paid_at || payment.created_at);
+        if (!date) return;
+        const customerName = order.customer?.name ?? 'Cliente';
+        const customerEmail = order.customer?.email ?? '';
+        const amount = parseFloat(payment.amount ?? '0') || 0;
+        items.push({
+          id: payment.id,
+          customerName,
+          customerEmail,
+          amount,
+          date: date.toLocaleString('pt-AO', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
+          status: mapPaymentStatusToTransactionStatus(payment.status),
+          method: mapGatewayToMethod(payment.gateway),
+        });
+      });
+    });
+    return items
+      .sort((a, b) => (a.date < b.date ? 1 : -1))
+      .slice(0, 10);
+  }, [filteredOrders]);
+
   return (
     <div className="p-6 lg:p-10 max-w-7xl mx-auto space-y-8">
+      {error && (
+        <div className="mb-4 text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl px-4 py-3">
+          {error}
+        </div>
+      )}
+
       {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <StatCard title="Vendas Totais (Mês)" value="Kz 2.450.000" trend="+12.5%" icon={Wallet} trendUp={true} />
-        <StatCard title="Transações" value="1,234" trend="+8.2%" icon={Activity} trendUp={true} />
-        <StatCard title="Ticket Médio" value="Kz 15.400" trend="-2.1%" icon={CreditCard} trendUp={false} />
-        <StatCard title="Novos Clientes" value="342" trend="+18.4%" icon={Users} trendUp={true} />
+        <StatCard
+          title="Vendas Totais"
+          value={`Kz ${stats.totalRevenue.toLocaleString()}`}
+          trend=""
+          icon={Wallet}
+          trendUp={true}
+        />
+        <StatCard
+          title="Transações Pagas"
+          value={stats.totalTransactions.toLocaleString()}
+          trend=""
+          icon={Activity}
+          trendUp={true}
+        />
+        <StatCard
+          title="Ticket Médio"
+          value={
+            stats.ticketMedio > 0
+              ? `Kz ${stats.ticketMedio.toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}`
+              : '—'
+          }
+          trend=""
+          icon={CreditCard}
+          trendUp={stats.ticketMedio >= 0}
+        />
+        <StatCard
+          title="Novos Clientes"
+          value={stats.newCustomers.toLocaleString()}
+          trend=""
+          icon={Users}
+          trendUp={true}
+        />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -52,14 +238,18 @@ export const Dashboard: React.FC = () => {
         <div className="lg:col-span-2 bg-white p-6 rounded-2xl shadow-soft border border-gray-50">
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-lg font-bold text-dark-text">Desempenho de Vendas</h2>
-            <select className="bg-gray-50 border border-gray-200 text-sm rounded-lg p-2 outline-none">
-              <option>Últimos 7 dias</option>
-              <option>Este Mês</option>
+            <select
+              className="bg-gray-50 border border-gray-200 text-sm rounded-lg p-2 outline-none"
+              value={dateRange}
+              onChange={(e) => setDateRange(e.target.value as DashboardDateRange)}
+            >
+              <option value="7_days">Últimos 7 dias</option>
+              <option value="this_month">Este Mês</option>
             </select>
           </div>
           <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={mockData}>
+              <AreaChart data={chartData}>
                 <defs>
                   <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#6363F1" stopOpacity={0.2} />

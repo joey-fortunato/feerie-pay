@@ -22,10 +22,21 @@ const StatusBadge = ({ status }: { status: TransactionStatus }) => {
   }
 };
 
-const gatewayLabel = (gateway: string) => {
+const gatewayLabel = (payment: PaymentDisplay) => {
+  const { gateway, gatewayReference, gatewayCode } = payment;
+  const hasRef = !!(gatewayReference || gatewayCode);
+
   if (gateway === 'gpo') return 'Multicaixa Express';
   if (gateway === 'ref') return 'Referência Multicaixa';
-  if (gateway === 'ekwanza_ticket' || gateway === 'ekwanza' || gateway === 'appypay') return 'Ekwanza';
+
+  // Registos antigos podem vir com gateway = appypay.
+  // Se tiver referência/código, tratamos como Referência Multicaixa; caso contrário, Multicaixa Express.
+  if (gateway === 'appypay') {
+    if (hasRef) return 'Referência Multicaixa';
+    return 'Multicaixa Express';
+  }
+
+  if (gateway === 'ekwanza_ticket' || gateway === 'ekwanza') return 'Ekwanza';
   return gateway;
 };
 
@@ -201,7 +212,7 @@ export const Transactions: React.FC = () => {
                           <p className="text-xs text-gray-400">{p.customerEmail}</p>
                         </div>
                       </td>
-                      <td className="py-4 px-6 text-sm text-gray-600">{gatewayLabel(p.gateway)}</td>
+                      <td className="py-4 px-6 text-sm text-gray-600">{gatewayLabel(p)}</td>
                       <td className="py-4 px-6 text-sm font-bold text-dark-text">Kz {p.amount.toLocaleString()}</td>
                       <td className="py-4 px-6">
                         <StatusBadge status={p.status} />
@@ -295,7 +306,7 @@ export const Transactions: React.FC = () => {
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-500">Gateway</span>
-                  <span className="font-medium">{gatewayLabel(selectedPayment.gateway)}</span>
+                  <span className="font-medium">{gatewayLabel(selectedPayment)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-500">Data</span>
